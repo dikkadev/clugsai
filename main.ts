@@ -9,20 +9,12 @@ let triedGettingKey = false
 const storageKey = 'L2VnTsJG7BYcMOy&oj'
 let ai: OpenAI
 
-const SYSTEM_MSG = `You are a highly knowledgeable and articulate artificial intelligence, designed to provide accurate and detailed answers to a wide range of questions. You're expected to provide clear, concise, and informative responses. In the very possible case that you are not 150% sure about the answer, say so and provide alternative search queries that may lead to better results. Only answer questions that you are confident about. If you are unsure, do not provide an answer.
-
-Instructions:
-Read the question carefully to understand what information is being asked for.
-Provide a direct, informative answer that is easy to understand.
-Include relevant details but avoid unnecessary information.
-Do not ask follow up questions or engage in conversation. Only answer or provide alternative search queries if you do not have a high confidence in any answer.
-
-The question will be provided in the first user message.`
+let SYSTEM_MSG : string
+const SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`
 
 chrome.storage.sync.get(storageKey, (data) => {
     const apiKey = data[storageKey]
     if (apiKey) {
-        console.log('Retrieved API Key:', apiKey)
         key = apiKey
     } else {
         console.log('No API Key found')
@@ -30,6 +22,9 @@ chrome.storage.sync.get(storageKey, (data) => {
     triedGettingKey = true
 })
 
+chrome.storage.sync.get('systemPrompt', function(data) {
+    SYSTEM_MSG = data['systemPrompt'] || SYSTEM_MSG_FALLBACK
+})
 
 enum Position {
     STANDALONE = 'STANDALONE',
@@ -70,15 +65,35 @@ function getSearchQUery(): string {
     }
 }
 
+let isFirstMessage = true
+interface ChatMessage {
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+}
+
+let chatHistory: ChatMessage[] = [];
 async function makeAiRespond(msg: string, updateFunc: (string) => void) {
+    if (isFirstMessage) {
+        isFirstMessage = false
+        msg = `${SYSTEM_MSG}\n${msg}`;
+    }
+
+    chatHistory.push({ role: 'user', content: msg });
+
     const stream = await ai.chat.completions.create({
         model: 'gpt-4o',
-        messages: [{ role: 'user', content: msg }],
+        messages: chatHistory as any,
         stream: true,
-    })
+    });
+
+    let aiResponse = '';
     for await (const chunk of stream) {
-        updateFunc(chunk.choices[0]?.delta?.content || '')
+        const content = chunk.choices[0]?.delta?.content || '';
+        aiResponse += content;
+        updateFunc(content);
     }
+
+    chatHistory.push({ role: 'assistant', content: aiResponse });
 }
 
 function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
@@ -90,13 +105,11 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
         div.className += " self-end"
     }
 
-
-    const content = document.createElement("p")
+    const content = document.createElement("div")
 
     div.appendChild(content)
 
     const updateFunc = async (msg: string) => {
-        // apppend msg to 'raw' attribute
         let old = content.getAttribute('raw') || ''
         let raw = old + msg
         content.setAttribute('raw', raw)
@@ -110,7 +123,7 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
 function createDiv(): HTMLDivElement {
     const div = document.createElement("div")
     div.id = DIV
-    let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[10rem]", "border", "border-emerald-800", "prose-sm"]
+    let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"]
 
     if (position === Position.SIDEBAR) {
         classes = classes.concat(["min-h-32", "w-full", "my-4"])
@@ -141,6 +154,7 @@ function createDiv(): HTMLDivElement {
         const [aiDiv, , aiUpdate] = msgDiv('ai')
         addMessageToDiv(aiDiv)
         makeAiRespond(msg, aiUpdate)
+        input.focus()
     }
     inputDiv.appendChild(sendButton)
 
@@ -174,6 +188,7 @@ window.onload = async function() {
     const rcnt = document.getElementById("rcnt")
 
     console.log(`query: ${getSearchQUery()}`)
+    console.log(`using system msg: ${SYSTEM_MSG}`)
 
     if (rcnt) {
         rcnt.className += ' !max-w-full'
@@ -217,7 +232,7 @@ window.onload = async function() {
         await new Promise(r => setTimeout(r, 75))
     }
 
-    const [aiDiv, , aiUpdate] = msgDiv('ai')
+    const [aiDiv, , aiUpdate] = msgDiv('assistant')
     addMessageToDiv(aiDiv)
     makeAiRespond(query, aiUpdate)
 

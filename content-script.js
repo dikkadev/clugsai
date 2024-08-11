@@ -6296,14 +6296,23 @@ var getSearchQUery = function() {
   }
 };
 async function makeAiRespond(msg, updateFunc) {
+  if (isFirstMessage) {
+    isFirstMessage = false;
+    msg = `${SYSTEM_MSG}\n${msg}`;
+  }
+  chatHistory.push({ role: "user", content: msg });
   const stream = await ai.chat.completions.create({
     model: "gpt-4o",
-    messages: [{ role: "user", content: msg }],
+    messages: chatHistory,
     stream: true
   });
+  let aiResponse = "";
   for await (const chunk of stream) {
-    updateFunc(chunk.choices[0]?.delta?.content || "");
+    const content = chunk.choices[0]?.delta?.content || "";
+    aiResponse += content;
+    updateFunc(content);
   }
+  chatHistory.push({ role: "assistant", content: aiResponse });
 }
 var msgDiv = function(role) {
   const div = document.createElement("div");
@@ -6313,7 +6322,7 @@ var msgDiv = function(role) {
   if (role === "user") {
     div.className += " self-end";
   }
-  const content = document.createElement("p");
+  const content = document.createElement("div");
   div.appendChild(content);
   const updateFunc = async (msg) => {
     let old = content.getAttribute("raw") || "";
@@ -6326,7 +6335,7 @@ var msgDiv = function(role) {
 var createDiv = function() {
   const div = document.createElement("div");
   div.id = DIV;
-  let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[10rem]", "border", "border-emerald-800", "prose-sm"];
+  let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
   if (position === Position.SIDEBAR) {
     classes = classes.concat(["min-h-32", "w-full", "my-4"]);
   } else if (position === Position.STANDALONE) {
@@ -6353,6 +6362,7 @@ var createDiv = function() {
     const [aiDiv, , aiUpdate] = msgDiv("ai");
     addMessageToDiv(aiDiv);
     makeAiRespond(msg, aiUpdate);
+    input.focus();
   };
   inputDiv.appendChild(sendButton);
   div.appendChild(msgsDiv);
@@ -6380,24 +6390,19 @@ var key = "";
 var triedGettingKey = false;
 var storageKey = "L2VnTsJG7BYcMOy&oj";
 var ai;
-var SYSTEM_MSG = `You are a highly knowledgeable and articulate artificial intelligence, designed to provide accurate and detailed answers to a wide range of questions. You're expected to provide clear, concise, and informative responses. In the very possible case that you are not 150% sure about the answer, say so and provide alternative search queries that may lead to better results. Only answer questions that you are confident about. If you are unsure, do not provide an answer.
-
-Instructions:
-Read the question carefully to understand what information is being asked for.
-Provide a direct, informative answer that is easy to understand.
-Include relevant details but avoid unnecessary information.
-Do not ask follow up questions or engage in conversation. Only answer or provide alternative search queries if you do not have a high confidence in any answer.
-
-The question will be provided in the first user message.`;
+var SYSTEM_MSG;
+var SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`;
 chrome.storage.sync.get(storageKey, (data) => {
   const apiKey = data[storageKey];
   if (apiKey) {
-    console.log("Retrieved API Key:", apiKey);
     key = apiKey;
   } else {
     console.log("No API Key found");
   }
   triedGettingKey = true;
+});
+chrome.storage.sync.get("systemPrompt", function(data) {
+  SYSTEM_MSG = data["systemPrompt"] || SYSTEM_MSG_FALLBACK;
 });
 var Position;
 (function(Position2) {
@@ -6405,9 +6410,12 @@ var Position;
   Position2["SIDEBAR"] = "SIDEBAR";
 })(Position || (Position = {}));
 var position = undefined;
+var isFirstMessage = true;
+var chatHistory = [];
 window.onload = async function() {
   const rcnt = document.getElementById("rcnt");
   console.log(`query: ${getSearchQUery()}`);
+  console.log(`using system msg: ${SYSTEM_MSG}`);
   if (rcnt) {
     rcnt.className += " !max-w-full";
     position = decidePosition(rcnt);
@@ -6440,7 +6448,7 @@ window.onload = async function() {
     quebbinUpdate(" " + word);
     await new Promise((r) => setTimeout(r, 75));
   }
-  const [aiDiv, , aiUpdate] = msgDiv("ai");
+  const [aiDiv, , aiUpdate] = msgDiv("assistant");
   addMessageToDiv(aiDiv);
   makeAiRespond(query, aiUpdate);
 };

@@ -6267,23 +6267,41 @@ var lexer = _Lexer.lex;
 // main.ts
 var decidePosition = function(rcnt) {
   if (rcnt.children.length === 1) {
-    return Position.STANDALONE;
+    return Position.just_results;
   } else if (rcnt.children.length >= 2) {
-    return Position.SIDEBAR;
+    let isOneOfTheChildATheSidecard = false;
+    for (let child of rcnt.children) {
+      if (child.id === "rhs") {
+        isOneOfTheChildATheSidecard = true;
+        break;
+      }
+    }
+    if (isOneOfTheChildATheSidecard) {
+      return Position.with_sidecard;
+    } else {
+      return Position.with_web_sources;
+    }
   } else {
-    return Position.STANDALONE;
+    return Position.just_results;
   }
 };
 var placeDivInRcnt = function(rcnt, newDiv, position) {
-  if (position === Position.STANDALONE) {
-    rcnt.appendChild(newDiv);
-  } else if (position === Position.SIDEBAR) {
-    const secondChild = rcnt.children[1];
-    if (secondChild.children.length > 0) {
-      secondChild.insertBefore(newDiv, secondChild.firstChild);
-    } else {
-      secondChild.appendChild(newDiv);
-    }
+  switch (position) {
+    case Position.just_results:
+      rcnt.appendChild(newDiv);
+      break;
+    case Position.with_sidecard:
+      const rhs = rcnt.querySelector("#rhs");
+      rhs.insertBefore(newDiv, rhs.firstChild);
+      break;
+    case Position.with_web_sources:
+      const centerCol = rcnt.querySelector("#center_col");
+      const wrapper = document.createElement("div");
+      wrapper.className = "flex flex-row space-x-10";
+      wrapper.appendChild(centerCol);
+      wrapper.appendChild(newDiv);
+      rcnt.appendChild(wrapper);
+      break;
   }
 };
 var getSearchQUery = function() {
@@ -6335,11 +6353,12 @@ var msgDiv = function(role) {
 var createDiv = function() {
   const div = document.createElement("div");
   div.id = DIV;
-  let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
-  if (position === Position.SIDEBAR) {
-    classes = classes.concat(["min-h-32", "w-full", "my-4"]);
-  } else if (position === Position.STANDALONE) {
-    classes = classes.concat(["h-[min-content]", "max-w-[33%]", "ml-[var(--rhs-margin)]"]);
+  let classes = ["flex", "flex-col", "h-[min-content]", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
+  if (position === Position.with_sidecard) {
+    classes = classes.concat(["w-full", "my-4"]);
+  } else if (position === Position.just_results) {
+    classes = classes.concat(["max-w-[33%]", "ml-[var(--rhs-margin)]"]);
+  } else if (position === Position.with_web_sources) {
   }
   div.className = classes.join(" ");
   const msgsDiv = document.createElement("div");
@@ -6406,49 +6425,69 @@ chrome.storage.sync.get("systemPrompt", function(data) {
 });
 var Position;
 (function(Position2) {
-  Position2["STANDALONE"] = "STANDALONE";
-  Position2["SIDEBAR"] = "SIDEBAR";
+  Position2["just_results"] = "just_results";
+  Position2["with_sidecard"] = "with_sidecard";
+  Position2["with_web_sources"] = "with_web_sources";
 })(Position || (Position = {}));
+Object.defineProperty(Position, "ToString", {
+  value: function(position) {
+    switch (position) {
+      case Position.just_results:
+        return "Just Results";
+      case Position.with_sidecard:
+        return "With Sidecard";
+      case Position.with_web_sources:
+        return "With Web Sources";
+    }
+  },
+  writable: false,
+  enumerable: false,
+  configurable: false
+});
 var position = undefined;
 var isFirstMessage = true;
 var chatHistory = [];
 window.onload = async function() {
   const rcnt = document.getElementById("rcnt");
+  if (!rcnt) {
+    console.warn("Element with id 'rcnt' not found");
+    return;
+  }
   console.log(`query: ${getSearchQUery()}`);
   console.log(`using system msg: ${SYSTEM_MSG}`);
   if (rcnt) {
-    rcnt.className += " !max-w-full";
     position = decidePosition(rcnt);
     console.warn(`position: ${position}`);
+    if (position === Position.just_results) {
+      rcnt.className += " !max-w-full";
+    }
     const newDiv = createDiv();
     placeDivInRcnt(rcnt, newDiv, position);
-  } else {
-    console.warn("Element with id 'rcnt' not found");
+    while (!triedGettingKey) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!key) {
+      DisplayError("API Key not found");
+      return;
+    }
+    const query = getSearchQUery();
+    ai = new openai_default({
+      apiKey: key,
+      dangerouslyAllowBrowser: true
+    });
+    ai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "system", content: SYSTEM_MSG }],
+      stream: false
+    });
+    const [quebbinDiv, , quebbinUpdate] = msgDiv("user");
+    addMessageToDiv(quebbinDiv);
+    for (let word of query.split(" ")) {
+      quebbinUpdate(" " + word);
+      await new Promise((r) => setTimeout(r, 75));
+    }
+    const [aiDiv, , aiUpdate] = msgDiv("assistant");
+    addMessageToDiv(aiDiv);
+    makeAiRespond(query, aiUpdate);
   }
-  while (!triedGettingKey) {
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  if (!key) {
-    DisplayError("API Key not found");
-    return;
-  }
-  const query = getSearchQUery();
-  ai = new openai_default({
-    apiKey: key,
-    dangerouslyAllowBrowser: true
-  });
-  ai.chat.completions.create({
-    model: "gpt-4o",
-    messages: [{ role: "system", content: SYSTEM_MSG }],
-    stream: false
-  });
-  const [quebbinDiv, , quebbinUpdate] = msgDiv("user");
-  addMessageToDiv(quebbinDiv);
-  for (let word of query.split(" ")) {
-    quebbinUpdate(" " + word);
-    await new Promise((r) => setTimeout(r, 75));
-  }
-  const [aiDiv, , aiUpdate] = msgDiv("assistant");
-  addMessageToDiv(aiDiv);
-  makeAiRespond(query, aiUpdate);
 };

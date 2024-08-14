@@ -9,7 +9,7 @@ let triedGettingKey = false
 const storageKey = 'L2VnTsJG7BYcMOy&oj'
 let ai: OpenAI
 
-let SYSTEM_MSG : string
+let SYSTEM_MSG: string
 const SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`
 
 chrome.storage.sync.get(storageKey, (data) => {
@@ -27,31 +27,68 @@ chrome.storage.sync.get('systemPrompt', function(data) {
 })
 
 enum Position {
-    STANDALONE = 'STANDALONE',
-    SIDEBAR = 'SIDEBAR'
+    just_results = 'just_results',
+    with_sidecard = 'with_sidecard',
+    with_web_sources = 'with_web_sources',
 }
+
+Object.defineProperty(Position, "ToString", {
+    value: function(position: Position): string {
+        switch (position) {
+            case Position.just_results:
+                return "Just Results"
+            case Position.with_sidecard:
+                return "With Sidecard"
+            case Position.with_web_sources:
+                return "With Web Sources"
+        }
+    },
+    writable: false,
+    enumerable: false,
+    configurable: false
+})
 
 let position: Position | undefined = undefined
 function decidePosition(rcnt: HTMLElement): Position {
     if (rcnt.children.length === 1) {
-        return Position.STANDALONE
+        return Position.just_results
     } else if (rcnt.children.length >= 2) {
-        return Position.SIDEBAR
+        let isOneOfTheChildATheSidecard = false
+        for (let child of rcnt.children) {
+            if (child.id === "rhs") {
+                isOneOfTheChildATheSidecard = true
+                break
+            }
+        }
+        if (isOneOfTheChildATheSidecard) {
+            return Position.with_sidecard
+        } else {
+            return Position.with_web_sources
+        }
     } else {
-        return Position.STANDALONE
+        return Position.just_results
     }
 }
 
 function placeDivInRcnt(rcnt: HTMLElement, newDiv: HTMLDivElement, position: Position) {
-    if (position === Position.STANDALONE) {
-        rcnt.appendChild(newDiv)
-    } else if (position === Position.SIDEBAR) {
-        const secondChild = rcnt.children[1]
-        if (secondChild.children.length > 0) {
-            secondChild.insertBefore(newDiv, secondChild.firstChild)
-        } else {
-            secondChild.appendChild(newDiv)
-        }
+    switch (position) {
+        case Position.just_results:
+            // just put next to center column that holds the search results
+            rcnt.appendChild(newDiv)
+            break
+        case Position.with_sidecard:
+            const rhs = rcnt.querySelector("#rhs")!
+            rhs.insertBefore(newDiv, rhs.firstChild)
+            break
+        case Position.with_web_sources:
+            // wrap id center_col in another div and then also put our div in there
+            const centerCol = rcnt.querySelector("#center_col")!
+            const wrapper = document.createElement("div")
+            wrapper.className = "flex flex-row space-x-10"
+            wrapper.appendChild(centerCol)
+            wrapper.appendChild(newDiv)
+            rcnt.appendChild(wrapper)
+            break
     }
 }
 
@@ -123,12 +160,14 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
 function createDiv(): HTMLDivElement {
     const div = document.createElement("div")
     div.id = DIV
-    let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"]
+    let classes = ["flex", "flex-col", "h-[min-content]", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"]
 
-    if (position === Position.SIDEBAR) {
-        classes = classes.concat(["min-h-32", "w-full", "my-4"])
-    } else if (position === Position.STANDALONE) {
-        classes = classes.concat(["h-[min-content]", "max-w-[33%]", "ml-[var(--rhs-margin)]"])
+    if (position === Position.with_sidecard) {
+        classes = classes.concat([ "w-full", "my-4"])
+    } else if (position === Position.just_results) {
+        classes = classes.concat(["max-w-[33%]", "ml-[var(--rhs-margin)]"])
+    } else if (position === Position.with_web_sources) {
+
     }
     div.className = classes.join(" ")
 
@@ -187,53 +226,58 @@ function DisplayError(msg: string) {
 window.onload = async function() {
     const rcnt = document.getElementById("rcnt")
 
+    if (!rcnt) {
+        console.warn("Element with id 'rcnt' not found")
+        return
+    }
+
     console.log(`query: ${getSearchQUery()}`)
     console.log(`using system msg: ${SYSTEM_MSG}`)
 
     if (rcnt) {
-        rcnt.className += ' !max-w-full'
         position = decidePosition(rcnt)
         console.warn(`position: ${position}`)
+        if (position === Position.just_results) {
+            rcnt.className += ' !max-w-full'
+        }
+
 
         const newDiv = createDiv()
 
         placeDivInRcnt(rcnt, newDiv, position)
-    } else {
-        console.warn("Element with id 'rcnt' not found")
+        while (!triedGettingKey) {
+            await new Promise(r => setTimeout(r, 500))
+        }
+
+        if (!key) {
+            DisplayError("API Key not found")
+            return
+        }
+
+        const query = getSearchQUery()
+
+        ai = new OpenAI({
+            apiKey: key,
+            dangerouslyAllowBrowser: true,
+        })
+
+        ai.chat.completions.create({
+            model: 'gpt-4o',
+            messages: [{ role: 'system', content: SYSTEM_MSG }],
+            stream: false,
+        })
+
+        const [quebbinDiv, , quebbinUpdate] = msgDiv('user')
+        addMessageToDiv(quebbinDiv)
+
+        for (let word of query.split(" ")) {
+            quebbinUpdate(' ' + word)
+            await new Promise(r => setTimeout(r, 75))
+        }
+
+        const [aiDiv, , aiUpdate] = msgDiv('assistant')
+        addMessageToDiv(aiDiv)
+        makeAiRespond(query, aiUpdate)
+
     }
-
-    while (!triedGettingKey) {
-        await new Promise(r => setTimeout(r, 500))
-    }
-
-    if (!key) {
-        DisplayError("API Key not found")
-        return
-    }
-
-    const query = getSearchQUery()
-
-    ai = new OpenAI({
-        apiKey: key,
-        dangerouslyAllowBrowser: true,
-    })
-
-     ai.chat.completions.create({
-        model: 'gpt-4o',
-        messages: [{ role: 'system', content: SYSTEM_MSG }],
-        stream: false,
-    })
-
-    const [quebbinDiv, , quebbinUpdate] = msgDiv('user')
-    addMessageToDiv(quebbinDiv)
-
-    for (let word of query.split(" ")) {
-        quebbinUpdate(' ' + word)
-        await new Promise(r => setTimeout(r, 75))
-    }
-
-    const [aiDiv, , aiUpdate] = msgDiv('assistant')
-    addMessageToDiv(aiDiv)
-    makeAiRespond(query, aiUpdate)
-
 }

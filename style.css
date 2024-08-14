@@ -856,10 +856,6 @@ video {
   height: min-content;
 }
 
-.min-h-32 {
-  min-height: 8rem;
-}
-
 .min-h-\[2ch\] {
   min-height: 2ch;
 }
@@ -870,10 +866,6 @@ video {
 
 .w-full {
   width: 100%;
-}
-
-.min-w-\[10rem\] {
-  min-width: 10rem;
 }
 
 .min-w-\[30rem\] {
@@ -898,6 +890,12 @@ video {
 
 .flex-col {
   flex-direction: column;
+}
+
+.space-x-10 > :not([hidden]) ~ :not([hidden]) {
+  --tw-space-x-reverse: 0;
+  margin-right: calc(2.5rem * var(--tw-space-x-reverse));
+  margin-left: calc(2.5rem * calc(1 - var(--tw-space-x-reverse)));
 }
 
 .self-end {

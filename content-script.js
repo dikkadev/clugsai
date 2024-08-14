@@ -6353,11 +6353,11 @@ var msgDiv = function(role) {
 var createDiv = function() {
   const div = document.createElement("div");
   div.id = DIV;
-  let classes = ["flex", "flex-col", "h-[min-content]", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
+  let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
   if (position === Position.with_sidecard) {
     classes = classes.concat(["w-full", "my-4"]);
   } else if (position === Position.just_results) {
-    classes = classes.concat(["max-w-[33%]", "ml-[var(--rhs-margin)]"]);
+    classes = classes.concat(["max-w-[33%]", "h-min", "ml-[var(--rhs-margin)]"]);
   } else if (position === Position.with_web_sources) {
   }
   div.className = classes.join(" ");

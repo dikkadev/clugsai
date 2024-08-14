@@ -851,7 +851,7 @@ video {
   height: 5rem;
 }
 
-.h-\[min-content\] {
+.h-min {
   height: -moz-min-content;
   height: min-content;
 }

@@ -6416,7 +6416,7 @@ chrome.storage.sync.get(storageKey, (data) => {
   if (apiKey) {
     key = apiKey;
   } else {
-    console.log("No API Key found");
+    console.error("No API Key found");
   }
   triedGettingKey = true;
 });
@@ -6453,11 +6453,11 @@ window.onload = async function() {
     console.warn("Element with id 'rcnt' not found");
     return;
   }
-  console.log(`query: ${getSearchQUery()}`);
-  console.log(`using system msg: ${SYSTEM_MSG}`);
+  console.debug(`query: ${getSearchQUery()}`);
+  console.debug(`using system msg: ${SYSTEM_MSG}`);
   if (rcnt) {
     position = decidePosition(rcnt);
-    console.warn(`position: ${position}`);
+    console.debug(`position: ${position}`);
     if (position === Position.just_results) {
       rcnt.className += " !max-w-full";
     }

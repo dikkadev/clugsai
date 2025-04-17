@@ -11,6 +11,14 @@ let ai: OpenAI
 
 let SYSTEM_MSG: string
 const SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`
+// Model selection with fallback from storage
+let MODEL = 'o4-mini'
+chrome.storage.sync.get('model', (data) => {
+    const m = data['model'];
+    if (m) {
+        MODEL = m;
+    }
+});
 
 chrome.storage.sync.get(storageKey, (data) => {
     const apiKey = data[storageKey]
@@ -118,7 +126,7 @@ async function makeAiRespond(msg: string, updateFunc: (string) => void) {
     chatHistory.push({ role: 'user', content: msg });
 
     const stream = await ai.chat.completions.create({
-        model: 'gpt-4o',
+        model: MODEL,
         messages: chatHistory as any,
         stream: true,
     });
@@ -262,7 +270,7 @@ window.onload = async function() {
         })
 
         ai.chat.completions.create({
-            model: 'gpt-4o',
+            model: MODEL,
             messages: [{ role: 'system', content: SYSTEM_MSG }],
             stream: false,
         })

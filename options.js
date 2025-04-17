@@ -3,25 +3,34 @@ document.addEventListener('DOMContentLoaded', function() {
     var saveButton = document.getElementById('saveButton');
     var systemPromptTextarea = document.getElementById('systemPrompt');
     var resetButton = document.getElementById('resetButton');
+    var modelSelect = document.getElementById('modelSelect');
     var storageKey = 'L2VnTsJG7BYcMOy&oj';
 
     const SYSTEM_MSG = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`;
 
-    // Load saved API key and system prompt
-    chrome.storage.sync.get(['systemPrompt', storageKey], function(data) {
+    // Load saved API key, system prompt, and model, with fallback
+    chrome.storage.sync.get(['systemPrompt', storageKey, 'model'], function(data) {
         apiKeyInput.value = data[storageKey] || '';
-        systemPromptTextarea.value = data['systemPrompt'] || SYSTEM_MSG; // Set default value
+        systemPromptTextarea.value = data['systemPrompt'] || SYSTEM_MSG;
+        var savedModel = data['model'];
+        // Fallback to default if no model saved or an invalid legacy key
+        if !savedModel {
+            savedModel = 'o4-mini';
+        }
+        modelSelect.value = savedModel;
     });
 
     // Save both API key and system prompt on button click
     saveButton.addEventListener('click', function() {
         var apiKey = apiKeyInput.value;
         var systemPrompt = systemPromptTextarea.value;
+        var model = modelSelect.value;
 
         // Save data
         chrome.storage.sync.set({
             [storageKey]: apiKey,
-            'systemPrompt': systemPrompt
+            'systemPrompt': systemPrompt,
+            'model': model
         }, function() {
             window.alert('Settings saved successfully!');
         });

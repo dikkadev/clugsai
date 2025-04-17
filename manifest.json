@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "clugsai",
-    "version": "0.0.1",
+    "version": "0.1.0",
     "description": "Clear Lightweight Untracked Google Search AI",
     "icons": {
       "16": "icons/icon16.png",

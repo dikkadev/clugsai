@@ -1,4 +1,4 @@
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/_shims/registry.mjs
+// node_modules/openai/_shims/registry.mjs
 function setShims(shims, options = { auto: false }) {
   if (auto) {
     throw new Error(`you must \`import 'openai/shims/${shims.kind}'\` before importing anything else from openai`);
@@ -36,7 +36,7 @@ var getDefaultAgent = undefined;
 var fileFromPath = undefined;
 var isFsReadStream = undefined;
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/_shims/MultipartBody.mjs
+// node_modules/openai/_shims/MultipartBody.mjs
 class MultipartBody {
   constructor(body) {
     this.body = body;
@@ -46,7 +46,7 @@ class MultipartBody {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/_shims/web-runtime.mjs
+// node_modules/openai/_shims/web-runtime.mjs
 function getRuntime({ manuallyImported } = {}) {
   const recommendation = manuallyImported ? `You may need to use polyfills` : `Add one of these imports before your first \`import \u2026 from 'openai'\`:
 - \`import 'openai/shims/node'\` (if you're running on Node)
@@ -101,17 +101,17 @@ function getRuntime({ manuallyImported } = {}) {
   };
 }
 
-// /home/dikka/projs/clugsai/node_modules/openai/shims/web.mjs
+// node_modules/openai/shims/web.mjs
 setShims(getRuntime({ manuallyImported: true }));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/version.mjs
-var VERSION = "4.55.4";
+// node_modules/openai/version.mjs
+var VERSION = "4.56.0";
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/_shims/index.mjs
+// node_modules/openai/_shims/index.mjs
 if (!kind)
   setShims(getRuntime(), { auto: true });
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/streaming.mjs
+// node_modules/openai/streaming.mjs
 async function* _iterSSEMessages(response, controller) {
   if (!response.body) {
     controller.abort();
@@ -154,7 +154,7 @@ async function* iterSSEChunks(iterator) {
     yield data;
   }
 }
-var findDoubleNewlineIndex = function(buffer) {
+function findDoubleNewlineIndex(buffer) {
   const newline = 10;
   const carriage = 13;
   for (let i = 0;i < buffer.length - 2; i++) {
@@ -169,14 +169,14 @@ var findDoubleNewlineIndex = function(buffer) {
     }
   }
   return -1;
-};
-var partition = function(str, delimiter) {
+}
+function partition(str, delimiter) {
   const index = str.indexOf(delimiter);
   if (index !== -1) {
     return [str.substring(0, index), delimiter, str.substring(index + delimiter.length)];
   }
   return [str, "", ""];
-};
+}
 function readableStreamAsyncIterable(stream) {
   if (stream[Symbol.asyncIterator])
     return stream;
@@ -467,7 +467,7 @@ class LineDecoder {
 LineDecoder.NEWLINE_CHARS = new Set(["\n", "\r"]);
 LineDecoder.NEWLINE_REGEXP = /\r\n|[\n\r]/g;
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/uploads.mjs
+// node_modules/openai/uploads.mjs
 async function toFile(value, name, options) {
   value = await value;
   options ?? (options = isFileLike(value) ? { lastModified: value.lastModified, type: value.type } : {});
@@ -501,13 +501,13 @@ async function getBytes(value) {
   }
   return parts;
 }
-var propsForError = function(value) {
+function propsForError(value) {
   const props = Object.getOwnPropertyNames(value);
   return `[${props.map((p) => `"${p}"`).join(", ")}]`;
-};
-var getName = function(value) {
+}
+function getName(value) {
   return getStringFromMaybeBuffer(value.name) || getStringFromMaybeBuffer(value.filename) || getStringFromMaybeBuffer(value.path)?.split(/[\\/]/).pop();
-};
+}
 var isResponseLike = (value) => value != null && typeof value === "object" && typeof value.url === "string" && typeof value.blob === "function";
 var isFileLike = (value) => value != null && typeof value === "object" && typeof value.name === "string" && typeof value.lastModified === "number" && isBlobLike(value);
 var isBlobLike = (value) => value != null && typeof value === "object" && typeof value.size === "number" && typeof value.type === "string" && typeof value.text === "function" && typeof value.slice === "function" && typeof value.arrayBuffer === "function";
@@ -552,7 +552,7 @@ var addFormValue = async (form, key, value) => {
   }
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/core.mjs
+// node_modules/openai/core.mjs
 async function defaultParseResponse(props) {
   const { response } = props;
   if (props.options.stream) {
@@ -579,7 +579,7 @@ async function defaultParseResponse(props) {
   debug("response", response.status, response.url, response.headers, text);
   return text;
 }
-var getBrowserInfo = function() {
+function getBrowserInfo() {
   if (typeof navigator === "undefined" || !navigator) {
     return null;
   }
@@ -601,7 +601,7 @@ var getBrowserInfo = function() {
     }
   }
   return null;
-};
+}
 function isEmptyObj(obj) {
   if (!obj)
     return true;
@@ -612,7 +612,7 @@ function isEmptyObj(obj) {
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
-var applyHeadersMut = function(targetHeaders, newHeaders) {
+function applyHeadersMut(targetHeaders, newHeaders) {
   for (const k in newHeaders) {
     if (!hasOwn(newHeaders, k))
       continue;
@@ -626,7 +626,7 @@ var applyHeadersMut = function(targetHeaders, newHeaders) {
       targetHeaders[lowerKey] = val;
     }
   }
-};
+}
 function debug(action, ...args) {
   if (typeof process !== "undefined" && process?.env?.["DEBUG"] === "true") {
     console.log(`OpenAI:DEBUG:${action}`, ...args);
@@ -1169,7 +1169,7 @@ var isRunningInBrowser = () => {
   return typeof window !== "undefined" && typeof window.document !== "undefined" && typeof navigator !== "undefined";
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/error.mjs
+// node_modules/openai/error.mjs
 class OpenAIError extends Error {
 }
 
@@ -1317,7 +1317,7 @@ class ContentFilterFinishReasonError extends OpenAIError {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/pagination.mjs
+// node_modules/openai/pagination.mjs
 class Page extends AbstractPage {
   constructor(client, response, body, options) {
     super(client, response, body, options);
@@ -1367,14 +1367,14 @@ class CursorPage extends AbstractPage {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resource.mjs
+// node_modules/openai/resource.mjs
 class APIResource {
   constructor(client) {
     this._client = client;
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/chat/completions.mjs
+// node_modules/openai/resources/chat/completions.mjs
 class Completions extends APIResource {
   create(body, options) {
     return this._client.post("/chat/completions", { body, ...options, stream: body.stream ?? false });
@@ -1383,7 +1383,7 @@ class Completions extends APIResource {
 (function(Completions2) {
 })(Completions || (Completions = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/chat/chat.mjs
+// node_modules/openai/resources/chat/chat.mjs
 class Chat extends APIResource {
   constructor() {
     super(...arguments);
@@ -1393,7 +1393,7 @@ class Chat extends APIResource {
 (function(Chat2) {
   Chat2.Completions = Completions;
 })(Chat || (Chat = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/audio/speech.mjs
+// node_modules/openai/resources/audio/speech.mjs
 class Speech extends APIResource {
   create(body, options) {
     return this._client.post("/audio/speech", { body, ...options, __binaryResponse: true });
@@ -1402,7 +1402,7 @@ class Speech extends APIResource {
 (function(Speech2) {
 })(Speech || (Speech = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/audio/transcriptions.mjs
+// node_modules/openai/resources/audio/transcriptions.mjs
 class Transcriptions extends APIResource {
   create(body, options) {
     return this._client.post("/audio/transcriptions", multipartFormRequestOptions({ body, ...options }));
@@ -1411,7 +1411,7 @@ class Transcriptions extends APIResource {
 (function(Transcriptions2) {
 })(Transcriptions || (Transcriptions = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/audio/translations.mjs
+// node_modules/openai/resources/audio/translations.mjs
 class Translations extends APIResource {
   create(body, options) {
     return this._client.post("/audio/translations", multipartFormRequestOptions({ body, ...options }));
@@ -1420,7 +1420,7 @@ class Translations extends APIResource {
 (function(Translations2) {
 })(Translations || (Translations = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/audio/audio.mjs
+// node_modules/openai/resources/audio/audio.mjs
 class Audio extends APIResource {
   constructor() {
     super(...arguments);
@@ -1434,7 +1434,7 @@ class Audio extends APIResource {
   Audio2.Translations = Translations;
   Audio2.Speech = Speech;
 })(Audio || (Audio = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/batches.mjs
+// node_modules/openai/resources/batches.mjs
 class Batches extends APIResource {
   create(body, options) {
     return this._client.post("/batches", { body, ...options });
@@ -1458,7 +1458,7 @@ class BatchesPage extends CursorPage {
 (function(Batches2) {
   Batches2.BatchesPage = BatchesPage;
 })(Batches || (Batches = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/assistants.mjs
+// node_modules/openai/resources/beta/assistants.mjs
 class Assistants extends APIResource {
   create(body, options) {
     return this._client.post("/assistants", {
@@ -1504,12 +1504,12 @@ class AssistantsPage extends CursorPage {
   Assistants2.AssistantsPage = AssistantsPage;
 })(Assistants || (Assistants = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/RunnableFunction.mjs
+// node_modules/openai/lib/RunnableFunction.mjs
 function isRunnableFunctionWithParse(fn) {
   return typeof fn.parse === "function";
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/chatCompletionUtils.mjs
+// node_modules/openai/lib/chatCompletionUtils.mjs
 var isAssistantMessage = (message) => {
   return message?.role === "assistant";
 };
@@ -1520,7 +1520,7 @@ var isToolMessage = (message) => {
   return message?.role === "tool";
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/EventStream.mjs
+// node_modules/openai/lib/EventStream.mjs
 var __classPrivateFieldSet2 = function(receiver, state, value, kind2, f) {
   if (kind2 === "m")
     throw new TypeError("Private method is not writable");
@@ -1696,7 +1696,7 @@ _EventStream_connectedPromise = new WeakMap, _EventStream_resolveConnectedPromis
   return this._emit("error", new OpenAIError(String(error5)));
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/parser.mjs
+// node_modules/openai/lib/parser.mjs
 function isAutoParsableResponseFormat(response_format) {
   return response_format?.["$brand"] === "auto-parseable-response-format";
 }
@@ -1734,7 +1734,7 @@ function parseChatCompletion(completion, params) {
   });
   return { ...completion, choices };
 }
-var parseResponseFormat = function(params, content) {
+function parseResponseFormat(params, content) {
   if (params.response_format?.type !== "json_schema") {
     return null;
   }
@@ -1746,8 +1746,8 @@ var parseResponseFormat = function(params, content) {
     return JSON.parse(content);
   }
   return null;
-};
-var parseToolCall = function(params, toolCall) {
+}
+function parseToolCall(params, toolCall) {
   const inputTool = params.tools?.find((inputTool2) => inputTool2.function?.name === toolCall.function.name);
   return {
     ...toolCall,
@@ -1756,7 +1756,7 @@ var parseToolCall = function(params, toolCall) {
       parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCall.function.arguments) : inputTool?.function.strict ? JSON.parse(toolCall.function.arguments) : null
     }
   };
-};
+}
 function shouldParseToolCall(params, toolCall) {
   if (!params) {
     return false;
@@ -1781,7 +1781,7 @@ function validateInputTools(tools) {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/AbstractChatCompletionRunner.mjs
+// node_modules/openai/lib/AbstractChatCompletionRunner.mjs
 var __classPrivateFieldGet3 = function(receiver, state, kind2, f) {
   if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a getter");
@@ -2114,7 +2114,7 @@ _AbstractChatCompletionRunner_instances = new WeakSet, _AbstractChatCompletionRu
   return typeof rawContent === "string" ? rawContent : rawContent === undefined ? "undefined" : JSON.stringify(rawContent);
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/ChatCompletionRunner.mjs
+// node_modules/openai/lib/ChatCompletionRunner.mjs
 class ChatCompletionRunner extends AbstractChatCompletionRunner {
   static runFunctions(client, params, options) {
     const runner = new ChatCompletionRunner;
@@ -2142,7 +2142,7 @@ class ChatCompletionRunner extends AbstractChatCompletionRunner {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/_vendor/partial-json-parser/parser.mjs
+// node_modules/openai/_vendor/partial-json-parser/parser.mjs
 var tokenize = (input) => {
   let current = 0;
   let tokens = [];
@@ -2362,8 +2362,8 @@ var generate = (tokens) => {
 };
 var partialParse = (input) => JSON.parse(generate(unstrip(strip(tokenize(input)))));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/ChatCompletionStream.mjs
-var finalizeChatCompletion = function(snapshot, params) {
+// node_modules/openai/lib/ChatCompletionStream.mjs
+function finalizeChatCompletion(snapshot, params) {
   const { id, choices, created, model, system_fingerprint, ...rest } = snapshot;
   const completion = {
     ...rest,
@@ -2443,15 +2443,15 @@ var finalizeChatCompletion = function(snapshot, params) {
     ...system_fingerprint ? { system_fingerprint } : {}
   };
   return maybeParseChatCompletion(completion, params);
-};
-var str = function(x) {
+}
+function str(x) {
   return JSON.stringify(x);
-};
-var assertIsEmpty = function(obj) {
+}
+function assertIsEmpty(obj) {
   return;
-};
-var assertNever = function(_x) {
-};
+}
+function assertNever(_x) {
+}
 var __classPrivateFieldSet3 = function(receiver, state, value, kind2, f) {
   if (kind2 === "m")
     throw new TypeError("Private method is not writable");
@@ -2848,7 +2848,7 @@ class ChatCompletionStream extends AbstractChatCompletionRunner {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
+// node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
 class ChatCompletionStreamingRunner extends ChatCompletionStream {
   static fromReadableStream(stream) {
     const runner = new ChatCompletionStreamingRunner(null);
@@ -2875,7 +2875,7 @@ class ChatCompletionStreamingRunner extends ChatCompletionStream {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/chat/completions.mjs
+// node_modules/openai/resources/beta/chat/completions.mjs
 class Completions2 extends APIResource {
   async parse(body, options) {
     validateInputTools(body.tools);
@@ -2905,7 +2905,7 @@ class Completions2 extends APIResource {
   }
 }
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/chat/chat.mjs
+// node_modules/openai/resources/beta/chat/chat.mjs
 class Chat2 extends APIResource {
   constructor() {
     super(...arguments);
@@ -2916,7 +2916,7 @@ class Chat2 extends APIResource {
   Chat3.Completions = Completions2;
 })(Chat2 || (Chat2 = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/AssistantStream.mjs
+// node_modules/openai/lib/AssistantStream.mjs
 var __classPrivateFieldGet5 = function(receiver, state, kind2, f) {
   if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a getter");
@@ -3445,7 +3445,7 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
   }
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/threads/messages.mjs
+// node_modules/openai/resources/beta/threads/messages.mjs
 class Messages extends APIResource {
   create(threadId, body, options) {
     return this._client.post(`/threads/${threadId}/messages`, {
@@ -3491,7 +3491,7 @@ class MessagesPage extends CursorPage {
   Messages2.MessagesPage = MessagesPage;
 })(Messages || (Messages = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/threads/runs/steps.mjs
+// node_modules/openai/resources/beta/threads/runs/steps.mjs
 class Steps extends APIResource {
   retrieve(threadId, runId, stepId, options) {
     return this._client.get(`/threads/${threadId}/runs/${runId}/steps/${stepId}`, {
@@ -3517,7 +3517,7 @@ class RunStepsPage extends CursorPage {
   Steps2.RunStepsPage = RunStepsPage;
 })(Steps || (Steps = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/threads/runs/runs.mjs
+// node_modules/openai/resources/beta/threads/runs/runs.mjs
 class Runs extends APIResource {
   constructor() {
     super(...arguments);
@@ -3633,7 +3633,7 @@ class RunsPage extends CursorPage {
   Runs2.RunStepsPage = RunStepsPage;
 })(Runs || (Runs = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/threads/threads.mjs
+// node_modules/openai/resources/beta/threads/threads.mjs
 class Threads extends APIResource {
   constructor() {
     super(...arguments);
@@ -3692,7 +3692,7 @@ class Threads extends APIResource {
   Threads2.MessagesPage = MessagesPage;
 })(Threads || (Threads = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/lib/Util.mjs
+// node_modules/openai/lib/Util.mjs
 var allSettledWithThrow = async (promises) => {
   const results = await Promise.allSettled(promises);
   const rejected = results.filter((result) => result.status === "rejected");
@@ -3711,7 +3711,7 @@ var allSettledWithThrow = async (promises) => {
   return values;
 };
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/vector-stores/files.mjs
+// node_modules/openai/resources/beta/vector-stores/files.mjs
 class Files extends APIResource {
   create(vectorStoreId, body, options) {
     return this._client.post(`/vector_stores/${vectorStoreId}/files`, {
@@ -3795,7 +3795,7 @@ class VectorStoreFilesPage extends CursorPage {
   Files2.VectorStoreFilesPage = VectorStoreFilesPage;
 })(Files || (Files = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/vector-stores/file-batches.mjs
+// node_modules/openai/resources/beta/vector-stores/file-batches.mjs
 class FileBatches extends APIResource {
   create(vectorStoreId, body, options) {
     return this._client.post(`/vector_stores/${vectorStoreId}/file_batches`, {
@@ -3884,7 +3884,7 @@ class FileBatches extends APIResource {
 (function(FileBatches2) {
 })(FileBatches || (FileBatches = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/vector-stores/vector-stores.mjs
+// node_modules/openai/resources/beta/vector-stores/vector-stores.mjs
 class VectorStores extends APIResource {
   constructor() {
     super(...arguments);
@@ -3938,7 +3938,7 @@ class VectorStoresPage extends CursorPage {
   VectorStores2.FileBatches = FileBatches;
 })(VectorStores || (VectorStores = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/beta/beta.mjs
+// node_modules/openai/resources/beta/beta.mjs
 class Beta extends APIResource {
   constructor() {
     super(...arguments);
@@ -3956,7 +3956,7 @@ class Beta extends APIResource {
   Beta2.AssistantsPage = AssistantsPage;
   Beta2.Threads = Threads;
 })(Beta || (Beta = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/completions.mjs
+// node_modules/openai/resources/completions.mjs
 class Completions3 extends APIResource {
   create(body, options) {
     return this._client.post("/completions", { body, ...options, stream: body.stream ?? false });
@@ -3964,7 +3964,7 @@ class Completions3 extends APIResource {
 }
 (function(Completions4) {
 })(Completions3 || (Completions3 = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/embeddings.mjs
+// node_modules/openai/resources/embeddings.mjs
 class Embeddings extends APIResource {
   create(body, options) {
     return this._client.post("/embeddings", { body, ...options });
@@ -3972,7 +3972,7 @@ class Embeddings extends APIResource {
 }
 (function(Embeddings2) {
 })(Embeddings || (Embeddings = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/files.mjs
+// node_modules/openai/resources/files.mjs
 class Files2 extends APIResource {
   create(body, options) {
     return this._client.post("/files", multipartFormRequestOptions({ body, ...options }));
@@ -4020,7 +4020,7 @@ class FileObjectsPage extends Page {
 (function(Files3) {
   Files3.FileObjectsPage = FileObjectsPage;
 })(Files2 || (Files2 = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
+// node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
 class Checkpoints extends APIResource {
   list(fineTuningJobId, query = {}, options) {
     if (isRequestOptions(query)) {
@@ -4036,7 +4036,7 @@ class FineTuningJobCheckpointsPage extends CursorPage {
   Checkpoints2.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
 })(Checkpoints || (Checkpoints = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
+// node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
 class Jobs extends APIResource {
   constructor() {
     super(...arguments);
@@ -4080,7 +4080,7 @@ class FineTuningJobEventsPage extends CursorPage {
   Jobs2.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
 })(Jobs || (Jobs = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/fine-tuning/fine-tuning.mjs
+// node_modules/openai/resources/fine-tuning/fine-tuning.mjs
 class FineTuning extends APIResource {
   constructor() {
     super(...arguments);
@@ -4092,7 +4092,7 @@ class FineTuning extends APIResource {
   FineTuning2.FineTuningJobsPage = FineTuningJobsPage;
   FineTuning2.FineTuningJobEventsPage = FineTuningJobEventsPage;
 })(FineTuning || (FineTuning = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/images.mjs
+// node_modules/openai/resources/images.mjs
 class Images extends APIResource {
   createVariation(body, options) {
     return this._client.post("/images/variations", multipartFormRequestOptions({ body, ...options }));
@@ -4106,7 +4106,7 @@ class Images extends APIResource {
 }
 (function(Images2) {
 })(Images || (Images = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/models.mjs
+// node_modules/openai/resources/models.mjs
 class Models extends APIResource {
   retrieve(model, options) {
     return this._client.get(`/models/${model}`, options);
@@ -4124,7 +4124,7 @@ class ModelsPage extends Page {
 (function(Models2) {
   Models2.ModelsPage = ModelsPage;
 })(Models || (Models = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/moderations.mjs
+// node_modules/openai/resources/moderations.mjs
 class Moderations extends APIResource {
   create(body, options) {
     return this._client.post("/moderations", { body, ...options });
@@ -4132,7 +4132,7 @@ class Moderations extends APIResource {
 }
 (function(Moderations2) {
 })(Moderations || (Moderations = {}));
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/uploads/parts.mjs
+// node_modules/openai/resources/uploads/parts.mjs
 class Parts extends APIResource {
   create(uploadId, body, options) {
     return this._client.post(`/uploads/${uploadId}/parts`, multipartFormRequestOptions({ body, ...options }));
@@ -4141,7 +4141,7 @@ class Parts extends APIResource {
 (function(Parts2) {
 })(Parts || (Parts = {}));
 
-// node_modules/.pnpm/openai@4.55.4/node_modules/openai/resources/uploads/uploads.mjs
+// node_modules/openai/resources/uploads/uploads.mjs
 class Uploads extends APIResource {
   constructor() {
     super(...arguments);
@@ -4160,7 +4160,7 @@ class Uploads extends APIResource {
 (function(Uploads2) {
   Uploads2.Parts = Parts;
 })(Uploads || (Uploads = {}));
-// /home/dikka/projs/clugsai/node_modules/openai/index.mjs
+// node_modules/openai/index.mjs
 var _a;
 
 class OpenAI extends APIClient {
@@ -4265,8 +4265,8 @@ var _deployments_endpoints = new Set([
 ]);
 var openai_default = OpenAI;
 
-// /home/dikka/projs/clugsai/node_modules/marked/lib/marked.esm.js
-var _getDefaults = function() {
+// node_modules/marked/lib/marked.esm.js
+function _getDefaults() {
   return {
     async: false,
     breaks: false,
@@ -4279,11 +4279,11 @@ var _getDefaults = function() {
     tokenizer: null,
     walkTokens: null
   };
-};
-var changeDefaults = function(newDefaults) {
+}
+function changeDefaults(newDefaults) {
   _defaults = newDefaults;
-};
-var escape$1 = function(html, encode) {
+}
+function escape$1(html, encode) {
   if (encode) {
     if (escapeTest.test(html)) {
       return html.replace(escapeReplace, getEscapeReplacement);
@@ -4294,8 +4294,8 @@ var escape$1 = function(html, encode) {
     }
   }
   return html;
-};
-var edit = function(regex, opt) {
+}
+function edit(regex, opt) {
   let source = typeof regex === "string" ? regex : regex.source;
   opt = opt || "";
   const obj = {
@@ -4310,16 +4310,16 @@ var edit = function(regex, opt) {
     }
   };
   return obj;
-};
-var cleanUrl = function(href) {
+}
+function cleanUrl(href) {
   try {
     href = encodeURI(href).replace(/%25/g, "%");
   } catch {
     return null;
   }
   return href;
-};
-var splitCells = function(tableRow, count) {
+}
+function splitCells(tableRow, count) {
   const row = tableRow.replace(/\|/g, (match, offset, str2) => {
     let escaped = false;
     let curr = offset;
@@ -4350,8 +4350,8 @@ var splitCells = function(tableRow, count) {
     cells[i] = cells[i].trim().replace(/\\\|/g, "|");
   }
   return cells;
-};
-var rtrim = function(str2, c, invert) {
+}
+function rtrim(str2, c, invert) {
   const l = str2.length;
   if (l === 0) {
     return "";
@@ -4368,8 +4368,8 @@ var rtrim = function(str2, c, invert) {
     }
   }
   return str2.slice(0, l - suffLen);
-};
-var findClosingBracket = function(str2, b) {
+}
+function findClosingBracket(str2, b) {
   if (str2.indexOf(b[1]) === -1) {
     return -1;
   }
@@ -4387,8 +4387,8 @@ var findClosingBracket = function(str2, b) {
     }
   }
   return -1;
-};
-var outputLink = function(cap, link, raw, lexer) {
+}
+function outputLink(cap, link, raw, lexer) {
   const href = link.href;
   const title = link.title ? escape$1(link.title) : null;
   const text = cap[1].replace(/\\([\[\]])/g, "$1");
@@ -4412,8 +4412,8 @@ var outputLink = function(cap, link, raw, lexer) {
     title,
     text: escape$1(text)
   };
-};
-var indentCodeCompensation = function(raw, text) {
+}
+function indentCodeCompensation(raw, text) {
   const matchIndentToCode = raw.match(/^(\s+)(?:```)/);
   if (matchIndentToCode === null) {
     return text;
@@ -4430,10 +4430,10 @@ var indentCodeCompensation = function(raw, text) {
     }
     return node;
   }).join("\n");
-};
-var marked = function(src, opt) {
+}
+function marked(src, opt) {
   return markedInstance.parse(src, opt);
-};
+}
 var _defaults = _getDefaults();
 var escapeTest = /[&<>"']/;
 var escapeReplace = new RegExp(escapeTest.source, "g");
@@ -5123,9 +5123,9 @@ var blockText = /^[^\n]+/;
 var _blockLabel = /(?!\s*\])(?:\\.|[^\[\]\\])+/;
 var def = edit(/^ {0,3}\[(label)\]: *(?:\n *)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n *)?| *\n *)(title))? *(?:\n+|$)/).replace("label", _blockLabel).replace("title", /(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex();
 var list = edit(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g, bullet).getRegex();
-var _tag = "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
+var _tag = "address|article|aside|base|basefont|blockquote|body|caption" + "|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption" + "|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe" + "|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option" + "|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title" + "|tr|track|ul";
 var _comment = /<!--(?:-?>|[\s\S]*?(?:-->|$))/;
-var html = edit("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n *)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$))", "i").replace("comment", _comment).replace("tag", _tag).replace("attribute", / +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex();
+var html = edit("^ {0,3}(?:" + "<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)" + "|comment[^\\n]*(\\n+|$)" + "|<\\?[\\s\\S]*?(?:\\?>\\n*|$)" + "|<![A-Z][\\s\\S]*?(?:>\\n*|$)" + "|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)" + "|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n *)+\\n|$)" + "|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$)" + "|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$)" + ")", "i").replace("comment", _comment).replace("tag", _tag).replace("attribute", / +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex();
 var paragraph = edit(_paragraph).replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("|lheading", "").replace("|table", "").replace("blockquote", " {0,3}>").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
 var blockquote = edit(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph", paragraph).getRegex();
 var blockNormal = {
@@ -5143,7 +5143,7 @@ var blockNormal = {
   table: noopTest,
   text: blockText
 };
-var gfmTable = edit("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("blockquote", " {0,3}>").replace("code", " {4}[^\\n]").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
+var gfmTable = edit("^ *([^\\n ].*)\\n" + " {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)" + "(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("blockquote", " {0,3}>").replace("code", " {4}[^\\n]").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
 var blockGfm = {
   ...blockNormal,
   table: gfmTable,
@@ -5151,7 +5151,7 @@ var blockGfm = {
 };
 var blockPedantic = {
   ...blockNormal,
-  html: edit('^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|\'[^\']*\'|\\s[^\'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))').replace("comment", _comment).replace(/tag/g, "(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),
+  html: edit("^ *(?:comment *(?:\\n|\\s*$)" + "|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)" + '|<tag(?:"[^"]*"|\'[^\']*\'|\\s[^\'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))').replace("comment", _comment).replace(/tag/g, "(?!(?:" + "a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub" + "|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)" + "\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),
   def: /^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,
   heading: /^(#{1,6})(.*)(?:\n+|$)/,
   fences: noopTest,
@@ -5166,12 +5166,12 @@ var _punctuation = "\\p{P}\\p{S}";
 var punctuation = edit(/^((?![*_])[\spunctuation])/, "u").replace(/punctuation/g, _punctuation).getRegex();
 var blockSkip = /\[[^[\]]*?\]\([^\(\)]*?\)|`[^`]*?`|<[^<>]*?>/g;
 var emStrongLDelim = edit(/^(?:\*+(?:((?!\*)[punct])|[^\s*]))|^_+(?:((?!_)[punct])|([^\s_]))/, "u").replace(/punct/g, _punctuation).getRegex();
-var emStrongRDelimAst = edit("^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)[punct](\\*+)(?=[\\s]|$)|[^punct\\s](\\*+)(?!\\*)(?=[punct\\s]|$)|(?!\\*)[punct\\s](\\*+)(?=[^punct\\s])|[\\s](\\*+)(?!\\*)(?=[punct])|(?!\\*)[punct](\\*+)(?!\\*)(?=[punct])|[^punct\\s](\\*+)(?=[^punct\\s])", "gu").replace(/punct/g, _punctuation).getRegex();
-var emStrongRDelimUnd = edit("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)[punct](_+)(?=[\\s]|$)|[^punct\\s](_+)(?!_)(?=[punct\\s]|$)|(?!_)[punct\\s](_+)(?=[^punct\\s])|[\\s](_+)(?!_)(?=[punct])|(?!_)[punct](_+)(?!_)(?=[punct])", "gu").replace(/punct/g, _punctuation).getRegex();
+var emStrongRDelimAst = edit("^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)" + "|[^*]+(?=[^*])" + "|(?!\\*)[punct](\\*+)(?=[\\s]|$)" + "|[^punct\\s](\\*+)(?!\\*)(?=[punct\\s]|$)" + "|(?!\\*)[punct\\s](\\*+)(?=[^punct\\s])" + "|[\\s](\\*+)(?!\\*)(?=[punct])" + "|(?!\\*)[punct](\\*+)(?!\\*)(?=[punct])" + "|[^punct\\s](\\*+)(?=[^punct\\s])", "gu").replace(/punct/g, _punctuation).getRegex();
+var emStrongRDelimUnd = edit("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)" + "|[^_]+(?=[^_])" + "|(?!_)[punct](_+)(?=[\\s]|$)" + "|[^punct\\s](_+)(?!_)(?=[punct\\s]|$)" + "|(?!_)[punct\\s](_+)(?=[^punct\\s])" + "|[\\s](_+)(?!_)(?=[punct])" + "|(?!_)[punct](_+)(?!_)(?=[punct])", "gu").replace(/punct/g, _punctuation).getRegex();
 var anyPunctuation = edit(/\\([punct])/, "gu").replace(/punct/g, _punctuation).getRegex();
 var autolink = edit(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme", /[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email", /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex();
 var _inlineComment = edit(_comment).replace("(?:-->|$)", "-->").getRegex();
-var tag = edit("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment", _inlineComment).replace("attribute", /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex();
+var tag = edit("^comment" + "|^</[a-zA-Z][\\w:-]*\\s*>" + "|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>" + "|^<\\?[\\s\\S]*?\\?>" + "|^<![a-zA-Z]+\\s[\\s\\S]*?>" + "|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment", _inlineComment).replace("attribute", /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex();
 var _inlineLabel = /(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/;
 var link = edit(/^!?\[(label)\]\(\s*(href)(?:\s+(title))?\s*\)/).replace("label", _inlineLabel).replace("href", /<(?:\\.|[^\n<>\\])+>|[^\s\x00-\x1f]*/).replace("title", /"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex();
 var reflink = edit(/^!?\[(label)\]\[(ref)\]/).replace("label", _inlineLabel).replace("ref", _blockLabel).getRegex();
@@ -5678,7 +5678,7 @@ class _Renderer {
     }
     if (body)
       body = `<tbody>${body}</tbody>`;
-    return "<table>\n<thead>\n" + header + "</thead>\n" + body + "</table>\n";
+    return "<table>\n" + "<thead>\n" + header + "</thead>\n" + body + "</table>\n";
   }
   tablerow({ text }) {
     return `<tr>\n${text}</tr>\n`;
@@ -6265,9 +6265,9 @@ var parser5 = _Parser.parse;
 var lexer = _Lexer.lex;
 
 // main.ts
-var decidePosition = function(rcnt) {
+function decidePosition(rcnt) {
   if (rcnt.children.length === 1) {
-    return Position.just_results;
+    return "just_results" /* just_results */;
   } else if (rcnt.children.length >= 2) {
     let isOneOfTheChildATheSidecard = false;
     for (let child of rcnt.children) {
@@ -6277,24 +6277,24 @@ var decidePosition = function(rcnt) {
       }
     }
     if (isOneOfTheChildATheSidecard) {
-      return Position.with_sidecard;
+      return "with_sidecard" /* with_sidecard */;
     } else {
-      return Position.with_web_sources;
+      return "with_web_sources" /* with_web_sources */;
     }
   } else {
-    return Position.just_results;
+    return "just_results" /* just_results */;
   }
-};
-var placeDivInRcnt = function(rcnt, newDiv, position) {
+}
+function placeDivInRcnt(rcnt, newDiv, position) {
   switch (position) {
-    case Position.just_results:
+    case "just_results" /* just_results */:
       rcnt.appendChild(newDiv);
       break;
-    case Position.with_sidecard:
+    case "with_sidecard" /* with_sidecard */:
       const rhs = rcnt.querySelector("#rhs");
       rhs.insertBefore(newDiv, rhs.firstChild);
       break;
-    case Position.with_web_sources:
+    case "with_web_sources" /* with_web_sources */:
       const centerCol = rcnt.querySelector("#center_col");
       const wrapper = document.createElement("div");
       wrapper.className = "flex flex-row space-x-10";
@@ -6303,8 +6303,8 @@ var placeDivInRcnt = function(rcnt, newDiv, position) {
       rcnt.appendChild(wrapper);
       break;
   }
-};
-var getSearchQUery = function() {
+}
+function getSearchQUery() {
   let queryInput = document.querySelector("textarea[name='q']");
   if (queryInput) {
     return queryInput.value;
@@ -6312,7 +6312,7 @@ var getSearchQUery = function() {
     console.warn("Query input not found");
     return "";
   }
-};
+}
 async function makeAiRespond(msg, updateFunc) {
   if (isFirstMessage) {
     isFirstMessage = false;
@@ -6320,7 +6320,7 @@ async function makeAiRespond(msg, updateFunc) {
   }
   chatHistory.push({ role: "user", content: msg });
   const stream = await ai.chat.completions.create({
-    model: "gpt-4o",
+    model: MODEL,
     messages: chatHistory,
     stream: true
   });
@@ -6332,7 +6332,7 @@ async function makeAiRespond(msg, updateFunc) {
   }
   chatHistory.push({ role: "assistant", content: aiResponse });
 }
-var msgDiv = function(role) {
+function msgDiv(role) {
   const div = document.createElement("div");
   const id = `ai-msg-${Math.random().toString(36).substring(7)}`;
   div.id = id;
@@ -6349,16 +6349,16 @@ var msgDiv = function(role) {
     content.innerHTML = await marked(raw);
   };
   return [div, id, updateFunc];
-};
-var createDiv = function() {
+}
+function createDiv() {
   const div = document.createElement("div");
   div.id = DIV;
   let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
-  if (position === Position.with_sidecard) {
+  if (position === "with_sidecard" /* with_sidecard */) {
     classes = classes.concat(["w-full", "my-4"]);
-  } else if (position === Position.just_results) {
+  } else if (position === "just_results" /* just_results */) {
     classes = classes.concat(["max-w-[33%]", "h-min", "ml-[var(--rhs-margin)]"]);
-  } else if (position === Position.with_web_sources) {
+  } else if (position === "with_web_sources" /* with_web_sources */) {
   }
   div.className = classes.join(" ");
   const msgsDiv = document.createElement("div");
@@ -6387,11 +6387,11 @@ var createDiv = function() {
   div.appendChild(msgsDiv);
   div.appendChild(inputDiv);
   return div;
-};
-var addMessageToDiv = function(div) {
+}
+function addMessageToDiv(div) {
   document.querySelector(`#${DIV} div`)?.appendChild(div);
-};
-var DisplayError = function(msg) {
+}
+function DisplayError(msg) {
   const error10 = document.createElement("div");
   error10.className = "border border-red-500 bg-red-200 p-4 rounded-xl text-red-900";
   error10.innerText = `Error: ${msg}!`;
@@ -6403,7 +6403,7 @@ var DisplayError = function(msg) {
     console.error("Container not found");
   }
   console.error(msg);
-};
+}
 var DIV = "ai-main-container";
 var key = "";
 var triedGettingKey = false;
@@ -6411,6 +6411,13 @@ var storageKey = "L2VnTsJG7BYcMOy&oj";
 var ai;
 var SYSTEM_MSG;
 var SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`;
+var MODEL = "o4-mini";
+chrome.storage.sync.get("model", (data) => {
+  const m = data["model"];
+  if (m) {
+    MODEL = m;
+  }
+});
 chrome.storage.sync.get(storageKey, (data) => {
   const apiKey = data[storageKey];
   if (apiKey) {
@@ -6424,19 +6431,19 @@ chrome.storage.sync.get("systemPrompt", function(data) {
   SYSTEM_MSG = data["systemPrompt"] || SYSTEM_MSG_FALLBACK;
 });
 var Position;
-(function(Position2) {
+((Position2) => {
   Position2["just_results"] = "just_results";
   Position2["with_sidecard"] = "with_sidecard";
   Position2["with_web_sources"] = "with_web_sources";
-})(Position || (Position = {}));
+})(Position ||= {});
 Object.defineProperty(Position, "ToString", {
   value: function(position) {
     switch (position) {
-      case Position.just_results:
+      case "just_results" /* just_results */:
         return "Just Results";
-      case Position.with_sidecard:
+      case "with_sidecard" /* with_sidecard */:
         return "With Sidecard";
-      case Position.with_web_sources:
+      case "with_web_sources" /* with_web_sources */:
         return "With Web Sources";
     }
   },
@@ -6458,7 +6465,7 @@ window.onload = async function() {
   if (rcnt) {
     position = decidePosition(rcnt);
     console.debug(`position: ${position}`);
-    if (position === Position.just_results) {
+    if (position === "just_results" /* just_results */) {
       rcnt.className += " !max-w-full";
     }
     const newDiv = createDiv();
@@ -6476,7 +6483,7 @@ window.onload = async function() {
       dangerouslyAllowBrowser: true
     });
     ai.chat.completions.create({
-      model: "gpt-4o",
+      model: MODEL,
       messages: [{ role: "system", content: SYSTEM_MSG }],
       stream: false
     });

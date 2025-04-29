@@ -5,34 +5,26 @@ import { marked } from 'marked';
 const DIV = 'ai-main-container'
 
 let key = ''
-let triedGettingKey = false
-const storageKey = 'L2VnTsJG7BYcMOy&oj'
+const apiKeyStorageKey = 'L2VnTsJG7BYcMOy&oj'
 let ai: OpenAI
 
 let SYSTEM_MSG: string
 const SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`
 // Model selection with fallback from storage
 let MODEL = 'o4-mini'
-chrome.storage.sync.get('model', (data) => {
-    const m = data['model'];
-    if (m) {
-        MODEL = m;
+
+let settingsLoaded = false;
+chrome.storage.sync.get([apiKeyStorageKey, 'model', 'systemPrompt'], (data) => {
+    key = data[apiKeyStorageKey] || '';
+    MODEL = data['model'] || 'o4-mini';
+    SYSTEM_MSG = data['systemPrompt'] || SYSTEM_MSG_FALLBACK;
+
+    if (!key) {
+        console.error('No API Key found');
     }
+    settingsLoaded = true;
+    console.debug(`Loaded settings: Key found? ${!!key}, Model: ${MODEL}, System Prompt: ${SYSTEM_MSG}`);
 });
-
-chrome.storage.sync.get(storageKey, (data) => {
-    const apiKey = data[storageKey]
-    if (apiKey) {
-        key = apiKey
-    } else {
-        console.error('No API Key found')
-    }
-    triedGettingKey = true
-})
-
-chrome.storage.sync.get('systemPrompt', function(data) {
-    SYSTEM_MSG = data['systemPrompt'] || SYSTEM_MSG_FALLBACK
-})
 
 enum Position {
     just_results = 'just_results',
@@ -242,7 +234,7 @@ window.onload = async function() {
     console.debug(`query: ${getSearchQUery()}`)
     console.debug(`using system msg: ${SYSTEM_MSG}`)
 
-    if (rcnt) {
+    if (rcnt) 
         position = decidePosition(rcnt)
         console.debug(`position: ${position}`)
         if (position === Position.just_results) {
@@ -253,13 +245,22 @@ window.onload = async function() {
         const newDiv = createDiv()
 
         placeDivInRcnt(rcnt, newDiv, position)
-        while (!triedGettingKey) {
+        while (!settingsLoaded) {
             await new Promise(r => setTimeout(r, 500))
+            console.debug('Waiting for settings...');
         }
 
+        // Check if the key is actually missing or just empty
         if (!key) {
-            DisplayError("API Key not found")
-            return
+            // Check if the key exists in storage but is empty
+            chrome.storage.sync.get(apiKeyStorageKey, (data) => {
+                if (apiKeyStorageKey in data) {
+                    DisplayError("API Key is set but empty. Please provide a valid key in the extension options.");
+                } else {
+                    DisplayError("API Key not found. Please set it in the extension options.");
+                }
+            });
+            return;
         }
 
         const query = getSearchQUery()
@@ -269,11 +270,19 @@ window.onload = async function() {
             dangerouslyAllowBrowser: true,
         })
 
-        ai.chat.completions.create({
-            model: MODEL,
-            messages: [{ role: 'system', content: SYSTEM_MSG }],
-            stream: false,
-        })
+        // Test connection early and catch errors
+        try {
+            await ai.chat.completions.create({
+                model: MODEL,
+                messages: [{ role: 'system', content: SYSTEM_MSG }],
+                stream: false, // Keep false for a simple check
+            });
+            console.debug("Initial API connection successful.");
+        } catch (error) {
+            console.error("Error during initial API connection test:", error);
+            DisplayError(`Failed to connect to the API. Please check your API key and network connection. Error: ${error.message}`);
+            return; // Stop execution if the initial check fails
+        }
 
         const [quebbinDiv, , quebbinUpdate] = msgDiv('user')
         addMessageToDiv(quebbinDiv)

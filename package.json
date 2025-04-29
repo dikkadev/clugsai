@@ -3,5 +3,8 @@
 		"@types/marked": "^6.0.0",
 		"marked": "^14.0.0",
 		"openai": "^4.55.4"
+	},
+	"devDependencies": {
+		"@types/chrome": "^0.0.317"
 	}
 }

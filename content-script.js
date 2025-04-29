@@ -104,60 +104,462 @@ function getRuntime({ manuallyImported } = {}) {
 // node_modules/openai/shims/web.mjs
 setShims(getRuntime({ manuallyImported: true }));
 
-// node_modules/openai/version.mjs
-var VERSION = "4.56.0";
+// node_modules/openai/internal/qs/formats.mjs
+var default_format = "RFC3986";
+var formatters = {
+  RFC1738: (v) => String(v).replace(/%20/g, "+"),
+  RFC3986: (v) => String(v)
+};
+var RFC1738 = "RFC1738";
 
-// node_modules/openai/_shims/index.mjs
-if (!kind)
-  setShims(getRuntime(), { auto: true });
-
-// node_modules/openai/streaming.mjs
-async function* _iterSSEMessages(response, controller) {
-  if (!response.body) {
-    controller.abort();
-    throw new OpenAIError(`Attempted to iterate over a response with no body`);
+// node_modules/openai/internal/qs/utils.mjs
+function is_buffer(obj) {
+  if (!obj || typeof obj !== "object") {
+    return false;
   }
-  const sseDecoder = new SSEDecoder;
-  const lineDecoder = new LineDecoder;
-  const iter = readableStreamAsyncIterable(response.body);
-  for await (const sseChunk of iterSSEChunks(iter)) {
-    for (const line of lineDecoder.decode(sseChunk)) {
-      const sse = sseDecoder.decode(line);
-      if (sse)
-        yield sse;
+  return !!(obj.constructor && obj.constructor.isBuffer && obj.constructor.isBuffer(obj));
+}
+function maybe_map(val, fn) {
+  if (is_array(val)) {
+    const mapped = [];
+    for (let i = 0;i < val.length; i += 1) {
+      mapped.push(fn(val[i]));
+    }
+    return mapped;
+  }
+  return fn(val);
+}
+var is_array = Array.isArray;
+var hex_table = (() => {
+  const array = [];
+  for (let i = 0;i < 256; ++i) {
+    array.push("%" + ((i < 16 ? "0" : "") + i.toString(16)).toUpperCase());
+  }
+  return array;
+})();
+var limit = 1024;
+var encode = (str, _defaultEncoder, charset, _kind, format) => {
+  if (str.length === 0) {
+    return str;
+  }
+  let string = str;
+  if (typeof str === "symbol") {
+    string = Symbol.prototype.toString.call(str);
+  } else if (typeof str !== "string") {
+    string = String(str);
+  }
+  if (charset === "iso-8859-1") {
+    return escape(string).replace(/%u[0-9a-f]{4}/gi, function($0) {
+      return "%26%23" + parseInt($0.slice(2), 16) + "%3B";
+    });
+  }
+  let out = "";
+  for (let j = 0;j < string.length; j += limit) {
+    const segment = string.length >= limit ? string.slice(j, j + limit) : string;
+    const arr = [];
+    for (let i = 0;i < segment.length; ++i) {
+      let c = segment.charCodeAt(i);
+      if (c === 45 || c === 46 || c === 95 || c === 126 || c >= 48 && c <= 57 || c >= 65 && c <= 90 || c >= 97 && c <= 122 || format === RFC1738 && (c === 40 || c === 41)) {
+        arr[arr.length] = segment.charAt(i);
+        continue;
+      }
+      if (c < 128) {
+        arr[arr.length] = hex_table[c];
+        continue;
+      }
+      if (c < 2048) {
+        arr[arr.length] = hex_table[192 | c >> 6] + hex_table[128 | c & 63];
+        continue;
+      }
+      if (c < 55296 || c >= 57344) {
+        arr[arr.length] = hex_table[224 | c >> 12] + hex_table[128 | c >> 6 & 63] + hex_table[128 | c & 63];
+        continue;
+      }
+      i += 1;
+      c = 65536 + ((c & 1023) << 10 | segment.charCodeAt(i) & 1023);
+      arr[arr.length] = hex_table[240 | c >> 18] + hex_table[128 | c >> 12 & 63] + hex_table[128 | c >> 6 & 63] + hex_table[128 | c & 63];
+    }
+    out += arr.join("");
+  }
+  return out;
+};
+
+// node_modules/openai/internal/qs/stringify.mjs
+var is_non_nullish_primitive = function(v) {
+  return typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "symbol" || typeof v === "bigint";
+};
+var inner_stringify = function(object, prefix, generateArrayPrefix, commaRoundTrip, allowEmptyArrays, strictNullHandling, skipNulls, encodeDotInKeys, encoder, filter, sort, allowDots, serializeDate, format, formatter, encodeValuesOnly, charset, sideChannel) {
+  let obj = object;
+  let tmp_sc = sideChannel;
+  let step = 0;
+  let find_flag = false;
+  while ((tmp_sc = tmp_sc.get(sentinel)) !== undefined && !find_flag) {
+    const pos = tmp_sc.get(object);
+    step += 1;
+    if (typeof pos !== "undefined") {
+      if (pos === step) {
+        throw new RangeError("Cyclic object value");
+      } else {
+        find_flag = true;
+      }
+    }
+    if (typeof tmp_sc.get(sentinel) === "undefined") {
+      step = 0;
     }
   }
-  for (const line of lineDecoder.flush()) {
-    const sse = sseDecoder.decode(line);
-    if (sse)
-      yield sse;
+  if (typeof filter === "function") {
+    obj = filter(prefix, obj);
+  } else if (obj instanceof Date) {
+    obj = serializeDate?.(obj);
+  } else if (generateArrayPrefix === "comma" && is_array2(obj)) {
+    obj = maybe_map(obj, function(value) {
+      if (value instanceof Date) {
+        return serializeDate?.(value);
+      }
+      return value;
+    });
   }
-}
-async function* iterSSEChunks(iterator) {
-  let data = new Uint8Array;
-  for await (const chunk of iterator) {
-    if (chunk == null) {
+  if (obj === null) {
+    if (strictNullHandling) {
+      return encoder && !encodeValuesOnly ? encoder(prefix, defaults.encoder, charset, "key", format) : prefix;
+    }
+    obj = "";
+  }
+  if (is_non_nullish_primitive(obj) || is_buffer(obj)) {
+    if (encoder) {
+      const key_value = encodeValuesOnly ? prefix : encoder(prefix, defaults.encoder, charset, "key", format);
+      return [
+        formatter?.(key_value) + "=" + formatter?.(encoder(obj, defaults.encoder, charset, "value", format))
+      ];
+    }
+    return [formatter?.(prefix) + "=" + formatter?.(String(obj))];
+  }
+  const values = [];
+  if (typeof obj === "undefined") {
+    return values;
+  }
+  let obj_keys;
+  if (generateArrayPrefix === "comma" && is_array2(obj)) {
+    if (encodeValuesOnly && encoder) {
+      obj = maybe_map(obj, encoder);
+    }
+    obj_keys = [{ value: obj.length > 0 ? obj.join(",") || null : undefined }];
+  } else if (is_array2(filter)) {
+    obj_keys = filter;
+  } else {
+    const keys = Object.keys(obj);
+    obj_keys = sort ? keys.sort(sort) : keys;
+  }
+  const encoded_prefix = encodeDotInKeys ? String(prefix).replace(/\./g, "%2E") : String(prefix);
+  const adjusted_prefix = commaRoundTrip && is_array2(obj) && obj.length === 1 ? encoded_prefix + "[]" : encoded_prefix;
+  if (allowEmptyArrays && is_array2(obj) && obj.length === 0) {
+    return adjusted_prefix + "[]";
+  }
+  for (let j = 0;j < obj_keys.length; ++j) {
+    const key = obj_keys[j];
+    const value = typeof key === "object" && typeof key.value !== "undefined" ? key.value : obj[key];
+    if (skipNulls && value === null) {
       continue;
     }
-    const binaryChunk = chunk instanceof ArrayBuffer ? new Uint8Array(chunk) : typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
-    let newData = new Uint8Array(data.length + binaryChunk.length);
-    newData.set(data);
-    newData.set(binaryChunk, data.length);
-    data = newData;
-    let patternIndex;
-    while ((patternIndex = findDoubleNewlineIndex(data)) !== -1) {
-      yield data.slice(0, patternIndex);
-      data = data.slice(patternIndex);
+    const encoded_key = allowDots && encodeDotInKeys ? key.replace(/\./g, "%2E") : key;
+    const key_prefix = is_array2(obj) ? typeof generateArrayPrefix === "function" ? generateArrayPrefix(adjusted_prefix, encoded_key) : adjusted_prefix : adjusted_prefix + (allowDots ? "." + encoded_key : "[" + encoded_key + "]");
+    sideChannel.set(object, step);
+    const valueSideChannel = new WeakMap;
+    valueSideChannel.set(sentinel, sideChannel);
+    push_to_array(values, inner_stringify(value, key_prefix, generateArrayPrefix, commaRoundTrip, allowEmptyArrays, strictNullHandling, skipNulls, encodeDotInKeys, generateArrayPrefix === "comma" && encodeValuesOnly && is_array2(obj) ? null : encoder, filter, sort, allowDots, serializeDate, format, formatter, encodeValuesOnly, charset, valueSideChannel));
+  }
+  return values;
+};
+var normalize_stringify_options = function(opts = defaults) {
+  if (typeof opts.allowEmptyArrays !== "undefined" && typeof opts.allowEmptyArrays !== "boolean") {
+    throw new TypeError("`allowEmptyArrays` option can only be `true` or `false`, when provided");
+  }
+  if (typeof opts.encodeDotInKeys !== "undefined" && typeof opts.encodeDotInKeys !== "boolean") {
+    throw new TypeError("`encodeDotInKeys` option can only be `true` or `false`, when provided");
+  }
+  if (opts.encoder !== null && typeof opts.encoder !== "undefined" && typeof opts.encoder !== "function") {
+    throw new TypeError("Encoder has to be a function.");
+  }
+  const charset = opts.charset || defaults.charset;
+  if (typeof opts.charset !== "undefined" && opts.charset !== "utf-8" && opts.charset !== "iso-8859-1") {
+    throw new TypeError("The charset option must be either utf-8, iso-8859-1, or undefined");
+  }
+  let format = default_format;
+  if (typeof opts.format !== "undefined") {
+    if (!has.call(formatters, opts.format)) {
+      throw new TypeError("Unknown format option provided.");
+    }
+    format = opts.format;
+  }
+  const formatter = formatters[format];
+  let filter = defaults.filter;
+  if (typeof opts.filter === "function" || is_array2(opts.filter)) {
+    filter = opts.filter;
+  }
+  let arrayFormat;
+  if (opts.arrayFormat && opts.arrayFormat in array_prefix_generators) {
+    arrayFormat = opts.arrayFormat;
+  } else if ("indices" in opts) {
+    arrayFormat = opts.indices ? "indices" : "repeat";
+  } else {
+    arrayFormat = defaults.arrayFormat;
+  }
+  if ("commaRoundTrip" in opts && typeof opts.commaRoundTrip !== "boolean") {
+    throw new TypeError("`commaRoundTrip` must be a boolean, or absent");
+  }
+  const allowDots = typeof opts.allowDots === "undefined" ? !!opts.encodeDotInKeys === true ? true : defaults.allowDots : !!opts.allowDots;
+  return {
+    addQueryPrefix: typeof opts.addQueryPrefix === "boolean" ? opts.addQueryPrefix : defaults.addQueryPrefix,
+    allowDots,
+    allowEmptyArrays: typeof opts.allowEmptyArrays === "boolean" ? !!opts.allowEmptyArrays : defaults.allowEmptyArrays,
+    arrayFormat,
+    charset,
+    charsetSentinel: typeof opts.charsetSentinel === "boolean" ? opts.charsetSentinel : defaults.charsetSentinel,
+    commaRoundTrip: !!opts.commaRoundTrip,
+    delimiter: typeof opts.delimiter === "undefined" ? defaults.delimiter : opts.delimiter,
+    encode: typeof opts.encode === "boolean" ? opts.encode : defaults.encode,
+    encodeDotInKeys: typeof opts.encodeDotInKeys === "boolean" ? opts.encodeDotInKeys : defaults.encodeDotInKeys,
+    encoder: typeof opts.encoder === "function" ? opts.encoder : defaults.encoder,
+    encodeValuesOnly: typeof opts.encodeValuesOnly === "boolean" ? opts.encodeValuesOnly : defaults.encodeValuesOnly,
+    filter,
+    format,
+    formatter,
+    serializeDate: typeof opts.serializeDate === "function" ? opts.serializeDate : defaults.serializeDate,
+    skipNulls: typeof opts.skipNulls === "boolean" ? opts.skipNulls : defaults.skipNulls,
+    sort: typeof opts.sort === "function" ? opts.sort : null,
+    strictNullHandling: typeof opts.strictNullHandling === "boolean" ? opts.strictNullHandling : defaults.strictNullHandling
+  };
+};
+function stringify(object, opts = {}) {
+  let obj = object;
+  const options = normalize_stringify_options(opts);
+  let obj_keys;
+  let filter;
+  if (typeof options.filter === "function") {
+    filter = options.filter;
+    obj = filter("", obj);
+  } else if (is_array2(options.filter)) {
+    filter = options.filter;
+    obj_keys = filter;
+  }
+  const keys = [];
+  if (typeof obj !== "object" || obj === null) {
+    return "";
+  }
+  const generateArrayPrefix = array_prefix_generators[options.arrayFormat];
+  const commaRoundTrip = generateArrayPrefix === "comma" && options.commaRoundTrip;
+  if (!obj_keys) {
+    obj_keys = Object.keys(obj);
+  }
+  if (options.sort) {
+    obj_keys.sort(options.sort);
+  }
+  const sideChannel = new WeakMap;
+  for (let i = 0;i < obj_keys.length; ++i) {
+    const key = obj_keys[i];
+    if (options.skipNulls && obj[key] === null) {
+      continue;
+    }
+    push_to_array(keys, inner_stringify(obj[key], key, generateArrayPrefix, commaRoundTrip, options.allowEmptyArrays, options.strictNullHandling, options.skipNulls, options.encodeDotInKeys, options.encode ? options.encoder : null, options.filter, options.sort, options.allowDots, options.serializeDate, options.format, options.formatter, options.encodeValuesOnly, options.charset, sideChannel));
+  }
+  const joined = keys.join(options.delimiter);
+  let prefix = options.addQueryPrefix === true ? "?" : "";
+  if (options.charsetSentinel) {
+    if (options.charset === "iso-8859-1") {
+      prefix += "utf8=%26%2310003%3B&";
+    } else {
+      prefix += "utf8=%E2%9C%93&";
     }
   }
-  if (data.length > 0) {
-    yield data;
+  return joined.length > 0 ? prefix + joined : "";
+}
+var has = Object.prototype.hasOwnProperty;
+var array_prefix_generators = {
+  brackets(prefix) {
+    return String(prefix) + "[]";
+  },
+  comma: "comma",
+  indices(prefix, key) {
+    return String(prefix) + "[" + key + "]";
+  },
+  repeat(prefix) {
+    return String(prefix);
+  }
+};
+var is_array2 = Array.isArray;
+var push = Array.prototype.push;
+var push_to_array = function(arr, value_or_array) {
+  push.apply(arr, is_array2(value_or_array) ? value_or_array : [value_or_array]);
+};
+var to_ISO = Date.prototype.toISOString;
+var defaults = {
+  addQueryPrefix: false,
+  allowDots: false,
+  allowEmptyArrays: false,
+  arrayFormat: "indices",
+  charset: "utf-8",
+  charsetSentinel: false,
+  delimiter: "&",
+  encode: true,
+  encodeDotInKeys: false,
+  encoder: encode,
+  encodeValuesOnly: false,
+  format: default_format,
+  formatter: formatters[default_format],
+  indices: false,
+  serializeDate(date) {
+    return to_ISO.call(date);
+  },
+  skipNulls: false,
+  strictNullHandling: false
+};
+var sentinel = {};
+// node_modules/openai/version.mjs
+var VERSION = "4.96.0";
+
+// node_modules/openai/_shims/index.mjs
+var init = () => {
+  if (!kind)
+    setShims(getRuntime(), { auto: true });
+};
+init();
+
+// node_modules/openai/error.mjs
+class OpenAIError extends Error {
+}
+
+class APIError extends OpenAIError {
+  constructor(status, error, message, headers) {
+    super(`${APIError.makeMessage(status, error, message)}`);
+    this.status = status;
+    this.headers = headers;
+    this.request_id = headers?.["x-request-id"];
+    this.error = error;
+    const data = error;
+    this.code = data?.["code"];
+    this.param = data?.["param"];
+    this.type = data?.["type"];
+  }
+  static makeMessage(status, error, message) {
+    const msg = error?.message ? typeof error.message === "string" ? error.message : JSON.stringify(error.message) : error ? JSON.stringify(error) : message;
+    if (status && msg) {
+      return `${status} ${msg}`;
+    }
+    if (status) {
+      return `${status} status code (no body)`;
+    }
+    if (msg) {
+      return msg;
+    }
+    return "(no status code or body)";
+  }
+  static generate(status, errorResponse, message, headers) {
+    if (!status || !headers) {
+      return new APIConnectionError({ message, cause: castToError(errorResponse) });
+    }
+    const error = errorResponse?.["error"];
+    if (status === 400) {
+      return new BadRequestError(status, error, message, headers);
+    }
+    if (status === 401) {
+      return new AuthenticationError(status, error, message, headers);
+    }
+    if (status === 403) {
+      return new PermissionDeniedError(status, error, message, headers);
+    }
+    if (status === 404) {
+      return new NotFoundError(status, error, message, headers);
+    }
+    if (status === 409) {
+      return new ConflictError(status, error, message, headers);
+    }
+    if (status === 422) {
+      return new UnprocessableEntityError(status, error, message, headers);
+    }
+    if (status === 429) {
+      return new RateLimitError(status, error, message, headers);
+    }
+    if (status >= 500) {
+      return new InternalServerError(status, error, message, headers);
+    }
+    return new APIError(status, error, message, headers);
   }
 }
+
+class APIUserAbortError extends APIError {
+  constructor({ message } = {}) {
+    super(undefined, undefined, message || "Request was aborted.", undefined);
+  }
+}
+
+class APIConnectionError extends APIError {
+  constructor({ message, cause }) {
+    super(undefined, undefined, message || "Connection error.", undefined);
+    if (cause)
+      this.cause = cause;
+  }
+}
+
+class APIConnectionTimeoutError extends APIConnectionError {
+  constructor({ message } = {}) {
+    super({ message: message ?? "Request timed out." });
+  }
+}
+
+class BadRequestError extends APIError {
+}
+
+class AuthenticationError extends APIError {
+}
+
+class PermissionDeniedError extends APIError {
+}
+
+class NotFoundError extends APIError {
+}
+
+class ConflictError extends APIError {
+}
+
+class UnprocessableEntityError extends APIError {
+}
+
+class RateLimitError extends APIError {
+}
+
+class InternalServerError extends APIError {
+}
+
+class LengthFinishReasonError extends OpenAIError {
+  constructor() {
+    super(`Could not parse response content as the length limit was reached`);
+  }
+}
+
+class ContentFilterFinishReasonError extends OpenAIError {
+  constructor() {
+    super(`Could not parse response content as the request was rejected by the content filter`);
+  }
+}
+
+// node_modules/openai/internal/decoders/line.mjs
+var findNewlineIndex = function(buffer, startIndex) {
+  const newline = 10;
+  const carriage = 13;
+  for (let i = startIndex ?? 0;i < buffer.length; i++) {
+    if (buffer[i] === newline) {
+      return { preceding: i, index: i + 1, carriage: false };
+    }
+    if (buffer[i] === carriage) {
+      return { preceding: i, index: i + 1, carriage: true };
+    }
+  }
+  return null;
+};
 function findDoubleNewlineIndex(buffer) {
   const newline = 10;
   const carriage = 13;
-  for (let i = 0;i < buffer.length - 2; i++) {
+  for (let i = 0;i < buffer.length - 1; i++) {
     if (buffer[i] === newline && buffer[i + 1] === newline) {
       return i + 2;
     }
@@ -170,14 +572,96 @@ function findDoubleNewlineIndex(buffer) {
   }
   return -1;
 }
-function partition(str, delimiter) {
-  const index = str.indexOf(delimiter);
-  if (index !== -1) {
-    return [str.substring(0, index), delimiter, str.substring(index + delimiter.length)];
+var __classPrivateFieldSet = function(receiver, state, value, kind2, f) {
+  if (kind2 === "m")
+    throw new TypeError("Private method is not writable");
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a setter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot write private member to an object whose class did not declare it");
+  return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
+};
+var __classPrivateFieldGet = function(receiver, state, kind2, f) {
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a getter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot read private member from an object whose class did not declare it");
+  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _LineDecoder_carriageReturnIndex;
+
+class LineDecoder {
+  constructor() {
+    _LineDecoder_carriageReturnIndex.set(this, undefined);
+    this.buffer = new Uint8Array;
+    __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, null, "f");
   }
-  return [str, "", ""];
+  decode(chunk) {
+    if (chunk == null) {
+      return [];
+    }
+    const binaryChunk = chunk instanceof ArrayBuffer ? new Uint8Array(chunk) : typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
+    let newData = new Uint8Array(this.buffer.length + binaryChunk.length);
+    newData.set(this.buffer);
+    newData.set(binaryChunk, this.buffer.length);
+    this.buffer = newData;
+    const lines = [];
+    let patternIndex;
+    while ((patternIndex = findNewlineIndex(this.buffer, __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f"))) != null) {
+      if (patternIndex.carriage && __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") == null) {
+        __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, patternIndex.index, "f");
+        continue;
+      }
+      if (__classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") != null && (patternIndex.index !== __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") + 1 || patternIndex.carriage)) {
+        lines.push(this.decodeText(this.buffer.slice(0, __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") - 1)));
+        this.buffer = this.buffer.slice(__classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f"));
+        __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, null, "f");
+        continue;
+      }
+      const endIndex = __classPrivateFieldGet(this, _LineDecoder_carriageReturnIndex, "f") !== null ? patternIndex.preceding - 1 : patternIndex.preceding;
+      const line = this.decodeText(this.buffer.slice(0, endIndex));
+      lines.push(line);
+      this.buffer = this.buffer.slice(patternIndex.index);
+      __classPrivateFieldSet(this, _LineDecoder_carriageReturnIndex, null, "f");
+    }
+    return lines;
+  }
+  decodeText(bytes) {
+    if (bytes == null)
+      return "";
+    if (typeof bytes === "string")
+      return bytes;
+    if (typeof Buffer !== "undefined") {
+      if (bytes instanceof Buffer) {
+        return bytes.toString();
+      }
+      if (bytes instanceof Uint8Array) {
+        return Buffer.from(bytes).toString();
+      }
+      throw new OpenAIError(`Unexpected: received non-Uint8Array (${bytes.constructor.name}) stream chunk in an environment with a global "Buffer" defined, which this library assumes to be Node. Please report this error.`);
+    }
+    if (typeof TextDecoder !== "undefined") {
+      if (bytes instanceof Uint8Array || bytes instanceof ArrayBuffer) {
+        this.textDecoder ?? (this.textDecoder = new TextDecoder("utf8"));
+        return this.textDecoder.decode(bytes);
+      }
+      throw new OpenAIError(`Unexpected: received non-Uint8Array/ArrayBuffer (${bytes.constructor.name}) in a web platform. Please report this error.`);
+    }
+    throw new OpenAIError(`Unexpected: neither Buffer nor TextDecoder are available as globals. Please report this error.`);
+  }
+  flush() {
+    if (!this.buffer.length) {
+      return [];
+    }
+    return this.decode("\n");
+  }
 }
-function readableStreamAsyncIterable(stream) {
+_LineDecoder_carriageReturnIndex = new WeakMap;
+LineDecoder.NEWLINE_CHARS = new Set(["\n", "\r"]);
+LineDecoder.NEWLINE_REGEXP = /\r\n|[\n\r]/g;
+
+// node_modules/openai/internal/stream-utils.mjs
+function ReadableStreamToAsyncIterable(stream) {
   if (stream[Symbol.asyncIterator])
     return stream;
   const reader = stream.getReader();
@@ -205,6 +689,57 @@ function readableStreamAsyncIterable(stream) {
   };
 }
 
+// node_modules/openai/streaming.mjs
+async function* _iterSSEMessages(response, controller) {
+  if (!response.body) {
+    controller.abort();
+    throw new OpenAIError(`Attempted to iterate over a response with no body`);
+  }
+  const sseDecoder = new SSEDecoder;
+  const lineDecoder = new LineDecoder;
+  const iter = ReadableStreamToAsyncIterable(response.body);
+  for await (const sseChunk of iterSSEChunks(iter)) {
+    for (const line2 of lineDecoder.decode(sseChunk)) {
+      const sse = sseDecoder.decode(line2);
+      if (sse)
+        yield sse;
+    }
+  }
+  for (const line2 of lineDecoder.flush()) {
+    const sse = sseDecoder.decode(line2);
+    if (sse)
+      yield sse;
+  }
+}
+async function* iterSSEChunks(iterator) {
+  let data = new Uint8Array;
+  for await (const chunk of iterator) {
+    if (chunk == null) {
+      continue;
+    }
+    const binaryChunk = chunk instanceof ArrayBuffer ? new Uint8Array(chunk) : typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
+    let newData = new Uint8Array(data.length + binaryChunk.length);
+    newData.set(data);
+    newData.set(binaryChunk, data.length);
+    data = newData;
+    let patternIndex;
+    while ((patternIndex = findDoubleNewlineIndex(data)) !== -1) {
+      yield data.slice(0, patternIndex);
+      data = data.slice(patternIndex);
+    }
+  }
+  if (data.length > 0) {
+    yield data;
+  }
+}
+var partition = function(str, delimiter) {
+  const index = str.indexOf(delimiter);
+  if (index !== -1) {
+    return [str.substring(0, index), delimiter, str.substring(index + delimiter.length)];
+  }
+  return [str, "", ""];
+};
+
 class Stream {
   constructor(iterator, controller) {
     this.iterator = iterator;
@@ -226,7 +761,7 @@ class Stream {
             done = true;
             continue;
           }
-          if (sse.event === null) {
+          if (sse.event === null || sse.event.startsWith("response.") || sse.event.startsWith("transcript.")) {
             let data;
             try {
               data = JSON.parse(sse.data);
@@ -236,7 +771,7 @@ class Stream {
               throw e;
             }
             if (data && data.error) {
-              throw new APIError(undefined, data.error, undefined, undefined);
+              throw new APIError(undefined, data.error, undefined, createResponseHeaders(response.headers));
             }
             yield data;
           } else {
@@ -270,14 +805,14 @@ class Stream {
     let consumed = false;
     async function* iterLines() {
       const lineDecoder = new LineDecoder;
-      const iter = readableStreamAsyncIterable(readableStream);
+      const iter = ReadableStreamToAsyncIterable(readableStream);
       for await (const chunk of iter) {
-        for (const line of lineDecoder.decode(chunk)) {
-          yield line;
+        for (const line2 of lineDecoder.decode(chunk)) {
+          yield line2;
         }
       }
-      for (const line of lineDecoder.flush()) {
-        yield line;
+      for (const line2 of lineDecoder.flush()) {
+        yield line2;
       }
     }
     async function* iterator() {
@@ -287,11 +822,11 @@ class Stream {
       consumed = true;
       let done = false;
       try {
-        for await (const line of iterLines()) {
+        for await (const line2 of iterLines()) {
           if (done)
             continue;
-          if (line)
-            yield JSON.parse(line);
+          if (line2)
+            yield JSON.parse(line2);
         }
         done = true;
       } catch (e) {
@@ -361,11 +896,11 @@ class SSEDecoder {
     this.data = [];
     this.chunks = [];
   }
-  decode(line) {
-    if (line.endsWith("\r")) {
-      line = line.substring(0, line.length - 1);
+  decode(line2) {
+    if (line2.endsWith("\r")) {
+      line2 = line2.substring(0, line2.length - 1);
     }
-    if (!line) {
+    if (!line2) {
       if (!this.event && !this.data.length)
         return null;
       const sse = {
@@ -378,11 +913,11 @@ class SSEDecoder {
       this.chunks = [];
       return sse;
     }
-    this.chunks.push(line);
-    if (line.startsWith(":")) {
+    this.chunks.push(line2);
+    if (line2.startsWith(":")) {
       return null;
     }
-    let [fieldname, _, value] = partition(line, ":");
+    let [fieldname, _, value] = partition(line2, ":");
     if (value.startsWith(" ")) {
       value = value.substring(1);
     }
@@ -395,90 +930,21 @@ class SSEDecoder {
   }
 }
 
-class LineDecoder {
-  constructor() {
-    this.buffer = [];
-    this.trailingCR = false;
-  }
-  decode(chunk) {
-    let text = this.decodeText(chunk);
-    if (this.trailingCR) {
-      text = "\r" + text;
-      this.trailingCR = false;
-    }
-    if (text.endsWith("\r")) {
-      this.trailingCR = true;
-      text = text.slice(0, -1);
-    }
-    if (!text) {
-      return [];
-    }
-    const trailingNewline = LineDecoder.NEWLINE_CHARS.has(text[text.length - 1] || "");
-    let lines = text.split(LineDecoder.NEWLINE_REGEXP);
-    if (trailingNewline) {
-      lines.pop();
-    }
-    if (lines.length === 1 && !trailingNewline) {
-      this.buffer.push(lines[0]);
-      return [];
-    }
-    if (this.buffer.length > 0) {
-      lines = [this.buffer.join("") + lines[0], ...lines.slice(1)];
-      this.buffer = [];
-    }
-    if (!trailingNewline) {
-      this.buffer = [lines.pop() || ""];
-    }
-    return lines;
-  }
-  decodeText(bytes) {
-    if (bytes == null)
-      return "";
-    if (typeof bytes === "string")
-      return bytes;
-    if (typeof Buffer !== "undefined") {
-      if (bytes instanceof Buffer) {
-        return bytes.toString();
-      }
-      if (bytes instanceof Uint8Array) {
-        return Buffer.from(bytes).toString();
-      }
-      throw new OpenAIError(`Unexpected: received non-Uint8Array (${bytes.constructor.name}) stream chunk in an environment with a global "Buffer" defined, which this library assumes to be Node. Please report this error.`);
-    }
-    if (typeof TextDecoder !== "undefined") {
-      if (bytes instanceof Uint8Array || bytes instanceof ArrayBuffer) {
-        this.textDecoder ?? (this.textDecoder = new TextDecoder("utf8"));
-        return this.textDecoder.decode(bytes);
-      }
-      throw new OpenAIError(`Unexpected: received non-Uint8Array/ArrayBuffer (${bytes.constructor.name}) in a web platform. Please report this error.`);
-    }
-    throw new OpenAIError(`Unexpected: neither Buffer nor TextDecoder are available as globals. Please report this error.`);
-  }
-  flush() {
-    if (!this.buffer.length && !this.trailingCR) {
-      return [];
-    }
-    const lines = [this.buffer.join("")];
-    this.buffer = [];
-    this.trailingCR = false;
-    return lines;
-  }
-}
-LineDecoder.NEWLINE_CHARS = new Set(["\n", "\r"]);
-LineDecoder.NEWLINE_REGEXP = /\r\n|[\n\r]/g;
-
 // node_modules/openai/uploads.mjs
 async function toFile(value, name, options) {
   value = await value;
-  options ?? (options = isFileLike(value) ? { lastModified: value.lastModified, type: value.type } : {});
+  if (isFileLike(value)) {
+    return value;
+  }
   if (isResponseLike(value)) {
     const blob = await value.blob();
     name || (name = new URL(value.url).pathname.split(/[\\/]/).pop() ?? "unknown_file");
-    return new File2([blob], name, options);
+    const data = isBlobLike(blob) ? [await blob.arrayBuffer()] : [blob];
+    return new File2(data, name, options);
   }
   const bits = await getBytes(value);
   name || (name = getName(value) ?? "unknown_file");
-  if (!options.type) {
+  if (!options?.type) {
     const type = bits[0]?.type;
     if (typeof type === "string") {
       options = { ...options, type };
@@ -501,13 +967,13 @@ async function getBytes(value) {
   }
   return parts;
 }
-function propsForError(value) {
+var propsForError = function(value) {
   const props = Object.getOwnPropertyNames(value);
   return `[${props.map((p) => `"${p}"`).join(", ")}]`;
-}
-function getName(value) {
+};
+var getName = function(value) {
   return getStringFromMaybeBuffer(value.name) || getStringFromMaybeBuffer(value.filename) || getStringFromMaybeBuffer(value.path)?.split(/[\\/]/).pop();
-}
+};
 var isResponseLike = (value) => value != null && typeof value === "object" && typeof value.url === "string" && typeof value.blob === "function";
 var isFileLike = (value) => value != null && typeof value === "object" && typeof value.name === "string" && typeof value.lastModified === "number" && isBlobLike(value);
 var isBlobLike = (value) => value != null && typeof value === "object" && typeof value.size === "number" && typeof value.type === "string" && typeof value.text === "function" && typeof value.slice === "function" && typeof value.arrayBuffer === "function";
@@ -569,17 +1035,27 @@ async function defaultParseResponse(props) {
     return response;
   }
   const contentType = response.headers.get("content-type");
-  const isJSON = contentType?.includes("application/json") || contentType?.includes("application/vnd.api+json");
+  const mediaType = contentType?.split(";")[0]?.trim();
+  const isJSON = mediaType?.includes("application/json") || mediaType?.endsWith("+json");
   if (isJSON) {
     const json = await response.json();
     debug("response", response.status, response.url, response.headers, json);
-    return json;
+    return _addRequestID(json, response);
   }
   const text = await response.text();
   debug("response", response.status, response.url, response.headers, text);
   return text;
 }
-function getBrowserInfo() {
+var _addRequestID = function(value, response) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  return Object.defineProperty(value, "_request_id", {
+    value: response.headers.get("x-request-id"),
+    enumerable: false
+  });
+};
+var getBrowserInfo = function() {
   if (typeof navigator === "undefined" || !navigator) {
     return null;
   }
@@ -601,7 +1077,7 @@ function getBrowserInfo() {
     }
   }
   return null;
-}
+};
 function isEmptyObj(obj) {
   if (!obj)
     return true;
@@ -612,7 +1088,7 @@ function isEmptyObj(obj) {
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
-function applyHeadersMut(targetHeaders, newHeaders) {
+var applyHeadersMut = function(targetHeaders, newHeaders) {
   for (const k in newHeaders) {
     if (!hasOwn(newHeaders, k))
       continue;
@@ -626,16 +1102,38 @@ function applyHeadersMut(targetHeaders, newHeaders) {
       targetHeaders[lowerKey] = val;
     }
   }
-}
+};
 function debug(action, ...args) {
   if (typeof process !== "undefined" && process?.env?.["DEBUG"] === "true") {
-    console.log(`OpenAI:DEBUG:${action}`, ...args);
+    const modifiedArgs = args.map((arg) => {
+      if (!arg) {
+        return arg;
+      }
+      if (arg["headers"]) {
+        const modifiedArg2 = { ...arg, headers: { ...arg["headers"] } };
+        for (const header in arg["headers"]) {
+          if (SENSITIVE_HEADERS.has(header.toLowerCase())) {
+            modifiedArg2["headers"][header] = "REDACTED";
+          }
+        }
+        return modifiedArg2;
+      }
+      let modifiedArg = null;
+      for (const header in arg) {
+        if (SENSITIVE_HEADERS.has(header.toLowerCase())) {
+          modifiedArg ?? (modifiedArg = { ...arg });
+          modifiedArg[header] = "REDACTED";
+        }
+      }
+      return modifiedArg ?? arg;
+    });
+    console.log(`OpenAI:DEBUG:${action}`, ...modifiedArgs);
   }
 }
 function isObj(obj) {
   return obj != null && typeof obj === "object" && !Array.isArray(obj);
 }
-var __classPrivateFieldSet = function(receiver, state, value, kind2, f) {
+var __classPrivateFieldSet2 = function(receiver, state, value, kind2, f) {
   if (kind2 === "m")
     throw new TypeError("Private method is not writable");
   if (kind2 === "a" && !f)
@@ -644,7 +1142,7 @@ var __classPrivateFieldSet = function(receiver, state, value, kind2, f) {
     throw new TypeError("Cannot write private member to an object whose class did not declare it");
   return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
 };
-var __classPrivateFieldGet = function(receiver, state, kind2, f) {
+var __classPrivateFieldGet2 = function(receiver, state, kind2, f) {
   if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a getter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
@@ -652,6 +1150,7 @@ var __classPrivateFieldGet = function(receiver, state, kind2, f) {
   return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 };
 var _AbstractPage_client;
+init();
 
 class APIPromise extends Promise {
   constructor(responsePromise, parseResponse = defaultParseResponse) {
@@ -662,14 +1161,14 @@ class APIPromise extends Promise {
     this.parseResponse = parseResponse;
   }
   _thenUnwrap(transform) {
-    return new APIPromise(this.responsePromise, async (props) => transform(await this.parseResponse(props)));
+    return new APIPromise(this.responsePromise, async (props) => _addRequestID(transform(await this.parseResponse(props), props), props.response));
   }
   asResponse() {
     return this.responsePromise.then((p) => p.response);
   }
   async withResponse() {
     const [data, response] = await Promise.all([this.parse(), this.asResponse()]);
-    return { data, response };
+    return { data, response, request_id: response.headers.get("x-request-id") };
   }
   parse() {
     if (!this.parsedPromise) {
@@ -694,13 +1193,13 @@ class APIClient {
     maxRetries = 2,
     timeout = 600000,
     httpAgent,
-    fetch: overridenFetch
+    fetch: overriddenFetch
   }) {
     this.baseURL = baseURL;
     this.maxRetries = validatePositiveInteger("maxRetries", maxRetries);
     this.timeout = validatePositiveInteger("timeout", timeout);
     this.httpAgent = httpAgent;
-    this.fetch = overridenFetch ?? fetch2;
+    this.fetch = overriddenFetch ?? fetch2;
   }
   authHeaders(opts) {
     return {};
@@ -758,25 +1257,26 @@ class APIClient {
     }
     return null;
   }
-  buildRequest(options) {
+  buildRequest(inputOptions, { retryCount = 0 } = {}) {
+    const options = { ...inputOptions };
     const { method, path, query, headers = {} } = options;
     const body = ArrayBuffer.isView(options.body) || options.__binaryRequest && typeof options.body === "string" ? options.body : isMultipartBody(options.body) ? options.body.body : options.body ? JSON.stringify(options.body, null, 2) : null;
     const contentLength = this.calculateContentLength(body);
     const url = this.buildURL(path, query);
     if ("timeout" in options)
       validatePositiveInteger("timeout", options.timeout);
-    const timeout = options.timeout ?? this.timeout;
+    options.timeout = options.timeout ?? this.timeout;
     const httpAgent = options.httpAgent ?? this.httpAgent ?? getDefaultAgent(url);
-    const minAgentTimeout = timeout + 1000;
+    const minAgentTimeout = options.timeout + 1000;
     if (typeof httpAgent?.options?.timeout === "number" && minAgentTimeout > (httpAgent.options.timeout ?? 0)) {
       httpAgent.options.timeout = minAgentTimeout;
     }
     if (this.idempotencyHeader && method !== "get") {
-      if (!options.idempotencyKey)
-        options.idempotencyKey = this.defaultIdempotencyKey();
-      headers[this.idempotencyHeader] = options.idempotencyKey;
+      if (!inputOptions.idempotencyKey)
+        inputOptions.idempotencyKey = this.defaultIdempotencyKey();
+      headers[this.idempotencyHeader] = inputOptions.idempotencyKey;
     }
-    const reqHeaders = this.buildHeaders({ options, headers, contentLength });
+    const reqHeaders = this.buildHeaders({ options, headers, contentLength, retryCount });
     const req = {
       method,
       ...body && { body },
@@ -784,9 +1284,9 @@ class APIClient {
       ...httpAgent && { agent: httpAgent },
       signal: options.signal ?? null
     };
-    return { req, url, timeout };
+    return { req, url, timeout: options.timeout };
   }
-  buildHeaders({ options, headers, contentLength }) {
+  buildHeaders({ options, headers, contentLength, retryCount }) {
     const reqHeaders = {};
     if (contentLength) {
       reqHeaders["content-length"] = contentLength;
@@ -796,6 +1296,12 @@ class APIClient {
     applyHeadersMut(reqHeaders, headers);
     if (isMultipartBody(options.body) && kind !== "node") {
       delete reqHeaders["content-type"];
+    }
+    if (getHeader(defaultHeaders, "x-stainless-retry-count") === undefined && getHeader(headers, "x-stainless-retry-count") === undefined) {
+      reqHeaders["x-stainless-retry-count"] = String(retryCount);
+    }
+    if (getHeader(defaultHeaders, "x-stainless-timeout") === undefined && getHeader(headers, "x-stainless-timeout") === undefined && options.timeout) {
+      reqHeaders["x-stainless-timeout"] = String(Math.trunc(options.timeout / 1000));
     }
     this.validateHeaders(reqHeaders, headers);
     return reqHeaders;
@@ -807,19 +1313,20 @@ class APIClient {
   parseHeaders(headers) {
     return !headers ? {} : (Symbol.iterator in headers) ? Object.fromEntries(Array.from(headers).map((header) => [...header])) : { ...headers };
   }
-  makeStatusError(status, error4, message, headers) {
-    return APIError.generate(status, error4, message, headers);
+  makeStatusError(status, error5, message, headers) {
+    return APIError.generate(status, error5, message, headers);
   }
   request(options, remainingRetries = null) {
     return new APIPromise(this.makeRequest(options, remainingRetries));
   }
   async makeRequest(optionsInput, retriesRemaining) {
     const options = await optionsInput;
+    const maxRetries = options.maxRetries ?? this.maxRetries;
     if (retriesRemaining == null) {
-      retriesRemaining = options.maxRetries ?? this.maxRetries;
+      retriesRemaining = maxRetries;
     }
     await this.prepareOptions(options);
-    const { req, url, timeout } = this.buildRequest(options);
+    const { req, url, timeout } = this.buildRequest(options, { retryCount: maxRetries - retriesRemaining });
     await this.prepareRequest(req, { url, options });
     debug("request", url, options, req.headers);
     if (options.signal?.aborted) {
@@ -882,17 +1389,21 @@ class APIClient {
       throw new OpenAIError(`Cannot stringify type ${typeof value}; Expected string, number, boolean, or null. If you need to pass nested query parameters, you can manually encode them, e.g. { query: { 'foo[key1]': value1, 'foo[key2]': value2 } }, and please open a GitHub issue requesting better support for your use case.`);
     }).join("&");
   }
-  async fetchWithTimeout(url, init, ms, controller) {
-    const { signal, ...options } = init || {};
+  async fetchWithTimeout(url, init2, ms, controller) {
+    const { signal, ...options } = init2 || {};
     if (signal)
       signal.addEventListener("abort", () => controller.abort());
     const timeout = setTimeout(() => controller.abort(), ms);
-    return this.getRequestClient().fetch.call(undefined, url, { signal: controller.signal, ...options }).finally(() => {
+    const fetchOptions = {
+      signal: controller.signal,
+      ...options
+    };
+    if (fetchOptions.method) {
+      fetchOptions.method = fetchOptions.method.toUpperCase();
+    }
+    return this.fetch.call(undefined, url, fetchOptions).finally(() => {
       clearTimeout(timeout);
     });
-  }
-  getRequestClient() {
-    return { fetch: this.fetch };
   }
   shouldRetry(response) {
     const shouldRetryHeader = response.headers.get("x-should-retry");
@@ -951,7 +1462,7 @@ class APIClient {
 class AbstractPage {
   constructor(client, response, body, options) {
     _AbstractPage_client.set(this, undefined);
-    __classPrivateFieldSet(this, _AbstractPage_client, client, "f");
+    __classPrivateFieldSet2(this, _AbstractPage_client, client, "f");
     this.options = options;
     this.response = response;
     this.body = body;
@@ -978,7 +1489,7 @@ class AbstractPage {
       nextOptions.query = undefined;
       nextOptions.path = nextInfo.url.toString();
     }
-    return await __classPrivateFieldGet(this, _AbstractPage_client, "f").requestAPIList(this.constructor, nextOptions);
+    return await __classPrivateFieldGet2(this, _AbstractPage_client, "f").requestAPIList(this.constructor, nextOptions);
   }
   async* iterPages() {
     let page = this;
@@ -1028,6 +1539,7 @@ var requestOptionsKeys = {
   httpAgent: true,
   signal: true,
   idempotencyKey: true,
+  __metadata: true,
   __binaryRequest: true,
   __binaryResponse: true,
   __streamClass: true
@@ -1130,7 +1642,7 @@ var safeJSON = (text) => {
     return;
   }
 };
-var startsWithSchemeRegexp = new RegExp("^(?:[a-z]+:)?//", "i");
+var startsWithSchemeRegexp = /^[a-z][a-z0-9+.-]*:/i;
 var isAbsoluteURL = (url) => {
   return startsWithSchemeRegexp.test(url);
 };
@@ -1147,6 +1659,12 @@ var validatePositiveInteger = (name, n) => {
 var castToError = (err) => {
   if (err instanceof Error)
     return err;
+  if (typeof err === "object" && err !== null) {
+    try {
+      return new Error(JSON.stringify(err));
+    } catch {
+    }
+  }
   return new Error(err);
 };
 var readEnv = (env) => {
@@ -1158,6 +1676,7 @@ var readEnv = (env) => {
   }
   return;
 };
+var SENSITIVE_HEADERS = new Set(["authorization", "api-key"]);
 var uuid4 = () => {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = Math.random() * 16 | 0;
@@ -1168,154 +1687,47 @@ var uuid4 = () => {
 var isRunningInBrowser = () => {
   return typeof window !== "undefined" && typeof window.document !== "undefined" && typeof navigator !== "undefined";
 };
-
-// node_modules/openai/error.mjs
-class OpenAIError extends Error {
-}
-
-class APIError extends OpenAIError {
-  constructor(status, error4, message, headers) {
-    super(`${APIError.makeMessage(status, error4, message)}`);
-    this.status = status;
-    this.headers = headers;
-    this.request_id = headers?.["x-request-id"];
-    const data = error4;
-    this.error = data;
-    this.code = data?.["code"];
-    this.param = data?.["param"];
-    this.type = data?.["type"];
-  }
-  static makeMessage(status, error4, message) {
-    const msg = error4?.message ? typeof error4.message === "string" ? error4.message : JSON.stringify(error4.message) : error4 ? JSON.stringify(error4) : message;
-    if (status && msg) {
-      return `${status} ${msg}`;
+var isHeadersProtocol = (headers) => {
+  return typeof headers?.get === "function";
+};
+var getHeader = (headers, header) => {
+  const lowerCasedHeader = header.toLowerCase();
+  if (isHeadersProtocol(headers)) {
+    const intercapsHeader = header[0]?.toUpperCase() + header.substring(1).replace(/([^\w])(\w)/g, (_m, g1, g2) => g1 + g2.toUpperCase());
+    for (const key of [header, lowerCasedHeader, header.toUpperCase(), intercapsHeader]) {
+      const value = headers.get(key);
+      if (value) {
+        return value;
+      }
     }
-    if (status) {
-      return `${status} status code (no body)`;
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerCasedHeader) {
+      if (Array.isArray(value)) {
+        if (value.length <= 1)
+          return value[0];
+        console.warn(`Received ${value.length} entries for the ${header} header, using the first entry.`);
+        return value[0];
+      }
+      return value;
     }
-    if (msg) {
-      return msg;
+  }
+  return;
+};
+var toFloat32Array = (base64Str) => {
+  if (typeof Buffer !== "undefined") {
+    const buf = Buffer.from(base64Str, "base64");
+    return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.length / Float32Array.BYTES_PER_ELEMENT));
+  } else {
+    const binaryStr = atob(base64Str);
+    const len = binaryStr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0;i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
     }
-    return "(no status code or body)";
+    return Array.from(new Float32Array(bytes.buffer));
   }
-  static generate(status, errorResponse, message, headers) {
-    if (!status) {
-      return new APIConnectionError({ cause: castToError(errorResponse) });
-    }
-    const error4 = errorResponse?.["error"];
-    if (status === 400) {
-      return new BadRequestError(status, error4, message, headers);
-    }
-    if (status === 401) {
-      return new AuthenticationError(status, error4, message, headers);
-    }
-    if (status === 403) {
-      return new PermissionDeniedError(status, error4, message, headers);
-    }
-    if (status === 404) {
-      return new NotFoundError(status, error4, message, headers);
-    }
-    if (status === 409) {
-      return new ConflictError(status, error4, message, headers);
-    }
-    if (status === 422) {
-      return new UnprocessableEntityError(status, error4, message, headers);
-    }
-    if (status === 429) {
-      return new RateLimitError(status, error4, message, headers);
-    }
-    if (status >= 500) {
-      return new InternalServerError(status, error4, message, headers);
-    }
-    return new APIError(status, error4, message, headers);
-  }
-}
-
-class APIUserAbortError extends APIError {
-  constructor({ message } = {}) {
-    super(undefined, undefined, message || "Request was aborted.", undefined);
-    this.status = undefined;
-  }
-}
-
-class APIConnectionError extends APIError {
-  constructor({ message, cause }) {
-    super(undefined, undefined, message || "Connection error.", undefined);
-    this.status = undefined;
-    if (cause)
-      this.cause = cause;
-  }
-}
-
-class APIConnectionTimeoutError extends APIConnectionError {
-  constructor({ message } = {}) {
-    super({ message: message ?? "Request timed out." });
-  }
-}
-
-class BadRequestError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 400;
-  }
-}
-
-class AuthenticationError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 401;
-  }
-}
-
-class PermissionDeniedError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 403;
-  }
-}
-
-class NotFoundError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 404;
-  }
-}
-
-class ConflictError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 409;
-  }
-}
-
-class UnprocessableEntityError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 422;
-  }
-}
-
-class RateLimitError extends APIError {
-  constructor() {
-    super(...arguments);
-    this.status = 429;
-  }
-}
-
-class InternalServerError extends APIError {
-}
-
-class LengthFinishReasonError extends OpenAIError {
-  constructor() {
-    super(`Could not parse response content as the length limit was reached`);
-  }
-}
-
-class ContentFilterFinishReasonError extends OpenAIError {
-  constructor() {
-    super(`Could not parse response content as the request was rejected by the content filter`);
-  }
-}
+};
 
 // node_modules/openai/pagination.mjs
 class Page extends AbstractPage {
@@ -1339,9 +1751,16 @@ class CursorPage extends AbstractPage {
   constructor(client, response, body, options) {
     super(client, response, body, options);
     this.data = body.data || [];
+    this.has_more = body.has_more || false;
   }
   getPaginatedItems() {
     return this.data ?? [];
+  }
+  hasNextPage() {
+    if (this.has_more === false) {
+      return false;
+    }
+    return super.hasNextPage();
   }
   nextPageParams() {
     const info = this.nextPageInfo();
@@ -1374,14 +1793,49 @@ class APIResource {
   }
 }
 
-// node_modules/openai/resources/chat/completions.mjs
+// node_modules/openai/resources/chat/completions/messages.mjs
+class Messages extends APIResource {
+  list(completionId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list(completionId, {}, query);
+    }
+    return this._client.getAPIList(`/chat/completions/${completionId}/messages`, ChatCompletionStoreMessagesPage, { query, ...options });
+  }
+}
+
+// node_modules/openai/resources/chat/completions/completions.mjs
 class Completions extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.messages = new Messages(this._client);
+  }
   create(body, options) {
     return this._client.post("/chat/completions", { body, ...options, stream: body.stream ?? false });
   }
+  retrieve(completionId, options) {
+    return this._client.get(`/chat/completions/${completionId}`, options);
+  }
+  update(completionId, body, options) {
+    return this._client.post(`/chat/completions/${completionId}`, { body, ...options });
+  }
+  list(query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list({}, query);
+    }
+    return this._client.getAPIList("/chat/completions", ChatCompletionsPage, { query, ...options });
+  }
+  del(completionId, options) {
+    return this._client.delete(`/chat/completions/${completionId}`, options);
+  }
 }
-(function(Completions2) {
-})(Completions || (Completions = {}));
+
+class ChatCompletionsPage extends CursorPage {
+}
+
+class ChatCompletionStoreMessagesPage extends CursorPage {
+}
+Completions.ChatCompletionsPage = ChatCompletionsPage;
+Completions.Messages = Messages;
 
 // node_modules/openai/resources/chat/chat.mjs
 class Chat extends APIResource {
@@ -1390,35 +1844,38 @@ class Chat extends APIResource {
     this.completions = new Completions(this._client);
   }
 }
-(function(Chat2) {
-  Chat2.Completions = Completions;
-})(Chat || (Chat = {}));
+Chat.Completions = Completions;
+Chat.ChatCompletionsPage = ChatCompletionsPage;
 // node_modules/openai/resources/audio/speech.mjs
 class Speech extends APIResource {
   create(body, options) {
-    return this._client.post("/audio/speech", { body, ...options, __binaryResponse: true });
+    return this._client.post("/audio/speech", {
+      body,
+      ...options,
+      headers: { Accept: "application/octet-stream", ...options?.headers },
+      __binaryResponse: true
+    });
   }
 }
-(function(Speech2) {
-})(Speech || (Speech = {}));
 
 // node_modules/openai/resources/audio/transcriptions.mjs
 class Transcriptions extends APIResource {
   create(body, options) {
-    return this._client.post("/audio/transcriptions", multipartFormRequestOptions({ body, ...options }));
+    return this._client.post("/audio/transcriptions", multipartFormRequestOptions({
+      body,
+      ...options,
+      stream: body.stream ?? false,
+      __metadata: { model: body.model }
+    }));
   }
 }
-(function(Transcriptions2) {
-})(Transcriptions || (Transcriptions = {}));
 
 // node_modules/openai/resources/audio/translations.mjs
 class Translations extends APIResource {
   create(body, options) {
-    return this._client.post("/audio/translations", multipartFormRequestOptions({ body, ...options }));
+    return this._client.post("/audio/translations", multipartFormRequestOptions({ body, ...options, __metadata: { model: body.model } }));
   }
 }
-(function(Translations2) {
-})(Translations || (Translations = {}));
 
 // node_modules/openai/resources/audio/audio.mjs
 class Audio extends APIResource {
@@ -1429,11 +1886,9 @@ class Audio extends APIResource {
     this.speech = new Speech(this._client);
   }
 }
-(function(Audio2) {
-  Audio2.Transcriptions = Transcriptions;
-  Audio2.Translations = Translations;
-  Audio2.Speech = Speech;
-})(Audio || (Audio = {}));
+Audio.Transcriptions = Transcriptions;
+Audio.Translations = Translations;
+Audio.Speech = Speech;
 // node_modules/openai/resources/batches.mjs
 class Batches extends APIResource {
   create(body, options) {
@@ -1455,73 +1910,9 @@ class Batches extends APIResource {
 
 class BatchesPage extends CursorPage {
 }
-(function(Batches2) {
-  Batches2.BatchesPage = BatchesPage;
-})(Batches || (Batches = {}));
-// node_modules/openai/resources/beta/assistants.mjs
-class Assistants extends APIResource {
-  create(body, options) {
-    return this._client.post("/assistants", {
-      body,
-      ...options,
-      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
-    });
-  }
-  retrieve(assistantId, options) {
-    return this._client.get(`/assistants/${assistantId}`, {
-      ...options,
-      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
-    });
-  }
-  update(assistantId, body, options) {
-    return this._client.post(`/assistants/${assistantId}`, {
-      body,
-      ...options,
-      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
-    });
-  }
-  list(query = {}, options) {
-    if (isRequestOptions(query)) {
-      return this.list({}, query);
-    }
-    return this._client.getAPIList("/assistants", AssistantsPage, {
-      query,
-      ...options,
-      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
-    });
-  }
-  del(assistantId, options) {
-    return this._client.delete(`/assistants/${assistantId}`, {
-      ...options,
-      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
-    });
-  }
-}
-
-class AssistantsPage extends CursorPage {
-}
-(function(Assistants2) {
-  Assistants2.AssistantsPage = AssistantsPage;
-})(Assistants || (Assistants = {}));
-
-// node_modules/openai/lib/RunnableFunction.mjs
-function isRunnableFunctionWithParse(fn) {
-  return typeof fn.parse === "function";
-}
-
-// node_modules/openai/lib/chatCompletionUtils.mjs
-var isAssistantMessage = (message) => {
-  return message?.role === "assistant";
-};
-var isFunctionMessage = (message) => {
-  return message?.role === "function";
-};
-var isToolMessage = (message) => {
-  return message?.role === "tool";
-};
-
+Batches.BatchesPage = BatchesPage;
 // node_modules/openai/lib/EventStream.mjs
-var __classPrivateFieldSet2 = function(receiver, state, value, kind2, f) {
+var __classPrivateFieldSet3 = function(receiver, state, value, kind2, f) {
   if (kind2 === "m")
     throw new TypeError("Private method is not writable");
   if (kind2 === "a" && !f)
@@ -1530,7 +1921,7 @@ var __classPrivateFieldSet2 = function(receiver, state, value, kind2, f) {
     throw new TypeError("Cannot write private member to an object whose class did not declare it");
   return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
 };
-var __classPrivateFieldGet2 = function(receiver, state, kind2, f) {
+var __classPrivateFieldGet3 = function(receiver, state, kind2, f) {
   if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a getter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
@@ -1570,17 +1961,17 @@ class EventStream {
     _EventStream_errored.set(this, false);
     _EventStream_aborted.set(this, false);
     _EventStream_catchingPromiseCreated.set(this, false);
-    __classPrivateFieldSet2(this, _EventStream_connectedPromise, new Promise((resolve, reject) => {
-      __classPrivateFieldSet2(this, _EventStream_resolveConnectedPromise, resolve, "f");
-      __classPrivateFieldSet2(this, _EventStream_rejectConnectedPromise, reject, "f");
+    __classPrivateFieldSet3(this, _EventStream_connectedPromise, new Promise((resolve, reject) => {
+      __classPrivateFieldSet3(this, _EventStream_resolveConnectedPromise, resolve, "f");
+      __classPrivateFieldSet3(this, _EventStream_rejectConnectedPromise, reject, "f");
     }), "f");
-    __classPrivateFieldSet2(this, _EventStream_endPromise, new Promise((resolve, reject) => {
-      __classPrivateFieldSet2(this, _EventStream_resolveEndPromise, resolve, "f");
-      __classPrivateFieldSet2(this, _EventStream_rejectEndPromise, reject, "f");
+    __classPrivateFieldSet3(this, _EventStream_endPromise, new Promise((resolve, reject) => {
+      __classPrivateFieldSet3(this, _EventStream_resolveEndPromise, resolve, "f");
+      __classPrivateFieldSet3(this, _EventStream_rejectEndPromise, reject, "f");
     }), "f");
-    __classPrivateFieldGet2(this, _EventStream_connectedPromise, "f").catch(() => {
+    __classPrivateFieldGet3(this, _EventStream_connectedPromise, "f").catch(() => {
     });
-    __classPrivateFieldGet2(this, _EventStream_endPromise, "f").catch(() => {
+    __classPrivateFieldGet3(this, _EventStream_endPromise, "f").catch(() => {
     });
   }
   _run(executor) {
@@ -1588,34 +1979,34 @@ class EventStream {
       executor().then(() => {
         this._emitFinal();
         this._emit("end");
-      }, __classPrivateFieldGet2(this, _EventStream_instances, "m", _EventStream_handleError).bind(this));
+      }, __classPrivateFieldGet3(this, _EventStream_instances, "m", _EventStream_handleError).bind(this));
     }, 0);
   }
   _connected() {
     if (this.ended)
       return;
-    __classPrivateFieldGet2(this, _EventStream_resolveConnectedPromise, "f").call(this);
+    __classPrivateFieldGet3(this, _EventStream_resolveConnectedPromise, "f").call(this);
     this._emit("connect");
   }
   get ended() {
-    return __classPrivateFieldGet2(this, _EventStream_ended, "f");
+    return __classPrivateFieldGet3(this, _EventStream_ended, "f");
   }
   get errored() {
-    return __classPrivateFieldGet2(this, _EventStream_errored, "f");
+    return __classPrivateFieldGet3(this, _EventStream_errored, "f");
   }
   get aborted() {
-    return __classPrivateFieldGet2(this, _EventStream_aborted, "f");
+    return __classPrivateFieldGet3(this, _EventStream_aborted, "f");
   }
   abort() {
     this.controller.abort();
   }
   on(event, listener) {
-    const listeners = __classPrivateFieldGet2(this, _EventStream_listeners, "f")[event] || (__classPrivateFieldGet2(this, _EventStream_listeners, "f")[event] = []);
+    const listeners = __classPrivateFieldGet3(this, _EventStream_listeners, "f")[event] || (__classPrivateFieldGet3(this, _EventStream_listeners, "f")[event] = []);
     listeners.push({ listener });
     return this;
   }
   off(event, listener) {
-    const listeners = __classPrivateFieldGet2(this, _EventStream_listeners, "f")[event];
+    const listeners = __classPrivateFieldGet3(this, _EventStream_listeners, "f")[event];
     if (!listeners)
       return this;
     const index = listeners.findIndex((l) => l.listener === listener);
@@ -1624,1300 +2015,82 @@ class EventStream {
     return this;
   }
   once(event, listener) {
-    const listeners = __classPrivateFieldGet2(this, _EventStream_listeners, "f")[event] || (__classPrivateFieldGet2(this, _EventStream_listeners, "f")[event] = []);
+    const listeners = __classPrivateFieldGet3(this, _EventStream_listeners, "f")[event] || (__classPrivateFieldGet3(this, _EventStream_listeners, "f")[event] = []);
     listeners.push({ listener, once: true });
     return this;
   }
   emitted(event) {
     return new Promise((resolve, reject) => {
-      __classPrivateFieldSet2(this, _EventStream_catchingPromiseCreated, true, "f");
+      __classPrivateFieldSet3(this, _EventStream_catchingPromiseCreated, true, "f");
       if (event !== "error")
         this.once("error", reject);
       this.once(event, resolve);
     });
   }
   async done() {
-    __classPrivateFieldSet2(this, _EventStream_catchingPromiseCreated, true, "f");
-    await __classPrivateFieldGet2(this, _EventStream_endPromise, "f");
+    __classPrivateFieldSet3(this, _EventStream_catchingPromiseCreated, true, "f");
+    await __classPrivateFieldGet3(this, _EventStream_endPromise, "f");
   }
   _emit(event, ...args) {
-    if (__classPrivateFieldGet2(this, _EventStream_ended, "f")) {
+    if (__classPrivateFieldGet3(this, _EventStream_ended, "f")) {
       return;
     }
     if (event === "end") {
-      __classPrivateFieldSet2(this, _EventStream_ended, true, "f");
-      __classPrivateFieldGet2(this, _EventStream_resolveEndPromise, "f").call(this);
+      __classPrivateFieldSet3(this, _EventStream_ended, true, "f");
+      __classPrivateFieldGet3(this, _EventStream_resolveEndPromise, "f").call(this);
     }
-    const listeners = __classPrivateFieldGet2(this, _EventStream_listeners, "f")[event];
+    const listeners = __classPrivateFieldGet3(this, _EventStream_listeners, "f")[event];
     if (listeners) {
-      __classPrivateFieldGet2(this, _EventStream_listeners, "f")[event] = listeners.filter((l) => !l.once);
+      __classPrivateFieldGet3(this, _EventStream_listeners, "f")[event] = listeners.filter((l) => !l.once);
       listeners.forEach(({ listener }) => listener(...args));
     }
     if (event === "abort") {
-      const error5 = args[0];
-      if (!__classPrivateFieldGet2(this, _EventStream_catchingPromiseCreated, "f") && !listeners?.length) {
-        Promise.reject(error5);
+      const error6 = args[0];
+      if (!__classPrivateFieldGet3(this, _EventStream_catchingPromiseCreated, "f") && !listeners?.length) {
+        Promise.reject(error6);
       }
-      __classPrivateFieldGet2(this, _EventStream_rejectConnectedPromise, "f").call(this, error5);
-      __classPrivateFieldGet2(this, _EventStream_rejectEndPromise, "f").call(this, error5);
+      __classPrivateFieldGet3(this, _EventStream_rejectConnectedPromise, "f").call(this, error6);
+      __classPrivateFieldGet3(this, _EventStream_rejectEndPromise, "f").call(this, error6);
       this._emit("end");
       return;
     }
     if (event === "error") {
-      const error5 = args[0];
-      if (!__classPrivateFieldGet2(this, _EventStream_catchingPromiseCreated, "f") && !listeners?.length) {
-        Promise.reject(error5);
+      const error6 = args[0];
+      if (!__classPrivateFieldGet3(this, _EventStream_catchingPromiseCreated, "f") && !listeners?.length) {
+        Promise.reject(error6);
       }
-      __classPrivateFieldGet2(this, _EventStream_rejectConnectedPromise, "f").call(this, error5);
-      __classPrivateFieldGet2(this, _EventStream_rejectEndPromise, "f").call(this, error5);
+      __classPrivateFieldGet3(this, _EventStream_rejectConnectedPromise, "f").call(this, error6);
+      __classPrivateFieldGet3(this, _EventStream_rejectEndPromise, "f").call(this, error6);
       this._emit("end");
     }
   }
   _emitFinal() {
   }
 }
-_EventStream_connectedPromise = new WeakMap, _EventStream_resolveConnectedPromise = new WeakMap, _EventStream_rejectConnectedPromise = new WeakMap, _EventStream_endPromise = new WeakMap, _EventStream_resolveEndPromise = new WeakMap, _EventStream_rejectEndPromise = new WeakMap, _EventStream_listeners = new WeakMap, _EventStream_ended = new WeakMap, _EventStream_errored = new WeakMap, _EventStream_aborted = new WeakMap, _EventStream_catchingPromiseCreated = new WeakMap, _EventStream_instances = new WeakSet, _EventStream_handleError = function _EventStream_handleError2(error5) {
-  __classPrivateFieldSet2(this, _EventStream_errored, true, "f");
-  if (error5 instanceof Error && error5.name === "AbortError") {
-    error5 = new APIUserAbortError;
+_EventStream_connectedPromise = new WeakMap, _EventStream_resolveConnectedPromise = new WeakMap, _EventStream_rejectConnectedPromise = new WeakMap, _EventStream_endPromise = new WeakMap, _EventStream_resolveEndPromise = new WeakMap, _EventStream_rejectEndPromise = new WeakMap, _EventStream_listeners = new WeakMap, _EventStream_ended = new WeakMap, _EventStream_errored = new WeakMap, _EventStream_aborted = new WeakMap, _EventStream_catchingPromiseCreated = new WeakMap, _EventStream_instances = new WeakSet, _EventStream_handleError = function _EventStream_handleError2(error6) {
+  __classPrivateFieldSet3(this, _EventStream_errored, true, "f");
+  if (error6 instanceof Error && error6.name === "AbortError") {
+    error6 = new APIUserAbortError;
   }
-  if (error5 instanceof APIUserAbortError) {
-    __classPrivateFieldSet2(this, _EventStream_aborted, true, "f");
-    return this._emit("abort", error5);
+  if (error6 instanceof APIUserAbortError) {
+    __classPrivateFieldSet3(this, _EventStream_aborted, true, "f");
+    return this._emit("abort", error6);
   }
-  if (error5 instanceof OpenAIError) {
-    return this._emit("error", error5);
+  if (error6 instanceof OpenAIError) {
+    return this._emit("error", error6);
   }
-  if (error5 instanceof Error) {
-    const openAIError = new OpenAIError(error5.message);
-    openAIError.cause = error5;
+  if (error6 instanceof Error) {
+    const openAIError = new OpenAIError(error6.message);
+    openAIError.cause = error6;
     return this._emit("error", openAIError);
   }
-  return this._emit("error", new OpenAIError(String(error5)));
+  return this._emit("error", new OpenAIError(String(error6)));
 };
-
-// node_modules/openai/lib/parser.mjs
-function isAutoParsableResponseFormat(response_format) {
-  return response_format?.["$brand"] === "auto-parseable-response-format";
-}
-function isAutoParsableTool(tool) {
-  return tool?.["$brand"] === "auto-parseable-tool";
-}
-function maybeParseChatCompletion(completion, params) {
-  if (!params || !hasAutoParseableInput(params)) {
-    return {
-      ...completion,
-      choices: completion.choices.map((choice) => ({
-        ...choice,
-        message: { ...choice.message, parsed: null, tool_calls: choice.message.tool_calls ?? [] }
-      }))
-    };
-  }
-  return parseChatCompletion(completion, params);
-}
-function parseChatCompletion(completion, params) {
-  const choices = completion.choices.map((choice) => {
-    if (choice.finish_reason === "length") {
-      throw new LengthFinishReasonError;
-    }
-    if (choice.finish_reason === "content_filter") {
-      throw new ContentFilterFinishReasonError;
-    }
-    return {
-      ...choice,
-      message: {
-        ...choice.message,
-        tool_calls: choice.message.tool_calls?.map((toolCall) => parseToolCall(params, toolCall)) ?? [],
-        parsed: choice.message.content && !choice.message.refusal ? parseResponseFormat(params, choice.message.content) : null
-      }
-    };
-  });
-  return { ...completion, choices };
-}
-function parseResponseFormat(params, content) {
-  if (params.response_format?.type !== "json_schema") {
-    return null;
-  }
-  if (params.response_format?.type === "json_schema") {
-    if ("$parseRaw" in params.response_format) {
-      const response_format = params.response_format;
-      return response_format.$parseRaw(content);
-    }
-    return JSON.parse(content);
-  }
-  return null;
-}
-function parseToolCall(params, toolCall) {
-  const inputTool = params.tools?.find((inputTool2) => inputTool2.function?.name === toolCall.function.name);
-  return {
-    ...toolCall,
-    function: {
-      ...toolCall.function,
-      parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCall.function.arguments) : inputTool?.function.strict ? JSON.parse(toolCall.function.arguments) : null
-    }
-  };
-}
-function shouldParseToolCall(params, toolCall) {
-  if (!params) {
-    return false;
-  }
-  const inputTool = params.tools?.find((inputTool2) => inputTool2.function?.name === toolCall.function.name);
-  return isAutoParsableTool(inputTool) || inputTool?.function.strict || false;
-}
-function hasAutoParseableInput(params) {
-  if (isAutoParsableResponseFormat(params.response_format)) {
-    return true;
-  }
-  return params.tools?.some((t) => isAutoParsableTool(t) || t.type === "function" && t.function.strict === true) ?? false;
-}
-function validateInputTools(tools) {
-  for (const tool of tools ?? []) {
-    if (tool.type !== "function") {
-      throw new OpenAIError(`Currently only \`function\` tool types support auto-parsing; Received \`${tool.type}\``);
-    }
-    if (tool.function.strict !== true) {
-      throw new OpenAIError(`The \`${tool.function.name}\` tool is not marked with \`strict: true\`. Only strict function tools can be auto-parsed`);
-    }
-  }
-}
-
-// node_modules/openai/lib/AbstractChatCompletionRunner.mjs
-var __classPrivateFieldGet3 = function(receiver, state, kind2, f) {
-  if (kind2 === "a" && !f)
-    throw new TypeError("Private accessor was defined without a getter");
-  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
-    throw new TypeError("Cannot read private member from an object whose class did not declare it");
-  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
-};
-var _AbstractChatCompletionRunner_instances;
-var _AbstractChatCompletionRunner_getFinalContent;
-var _AbstractChatCompletionRunner_getFinalMessage;
-var _AbstractChatCompletionRunner_getFinalFunctionCall;
-var _AbstractChatCompletionRunner_getFinalFunctionCallResult;
-var _AbstractChatCompletionRunner_calculateTotalUsage;
-var _AbstractChatCompletionRunner_validateParams;
-var _AbstractChatCompletionRunner_stringifyFunctionCallResult;
-var DEFAULT_MAX_CHAT_COMPLETIONS = 10;
-
-class AbstractChatCompletionRunner extends EventStream {
-  constructor() {
-    super(...arguments);
-    _AbstractChatCompletionRunner_instances.add(this);
-    this._chatCompletions = [];
-    this.messages = [];
-  }
-  _addChatCompletion(chatCompletion) {
-    this._chatCompletions.push(chatCompletion);
-    this._emit("chatCompletion", chatCompletion);
-    const message = chatCompletion.choices[0]?.message;
-    if (message)
-      this._addMessage(message);
-    return chatCompletion;
-  }
-  _addMessage(message, emit = true) {
-    if (!("content" in message))
-      message.content = null;
-    this.messages.push(message);
-    if (emit) {
-      this._emit("message", message);
-      if ((isFunctionMessage(message) || isToolMessage(message)) && message.content) {
-        this._emit("functionCallResult", message.content);
-      } else if (isAssistantMessage(message) && message.function_call) {
-        this._emit("functionCall", message.function_call);
-      } else if (isAssistantMessage(message) && message.tool_calls) {
-        for (const tool_call of message.tool_calls) {
-          if (tool_call.type === "function") {
-            this._emit("functionCall", tool_call.function);
-          }
-        }
-      }
-    }
-  }
-  async finalChatCompletion() {
-    await this.done();
-    const completion = this._chatCompletions[this._chatCompletions.length - 1];
-    if (!completion)
-      throw new OpenAIError("stream ended without producing a ChatCompletion");
-    return completion;
-  }
-  async finalContent() {
-    await this.done();
-    return __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalContent).call(this);
-  }
-  async finalMessage() {
-    await this.done();
-    return __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this);
-  }
-  async finalFunctionCall() {
-    await this.done();
-    return __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCall).call(this);
-  }
-  async finalFunctionCallResult() {
-    await this.done();
-    return __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCallResult).call(this);
-  }
-  async totalUsage() {
-    await this.done();
-    return __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_calculateTotalUsage).call(this);
-  }
-  allChatCompletions() {
-    return [...this._chatCompletions];
-  }
-  _emitFinal() {
-    const completion = this._chatCompletions[this._chatCompletions.length - 1];
-    if (completion)
-      this._emit("finalChatCompletion", completion);
-    const finalMessage = __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this);
-    if (finalMessage)
-      this._emit("finalMessage", finalMessage);
-    const finalContent = __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalContent).call(this);
-    if (finalContent)
-      this._emit("finalContent", finalContent);
-    const finalFunctionCall = __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCall).call(this);
-    if (finalFunctionCall)
-      this._emit("finalFunctionCall", finalFunctionCall);
-    const finalFunctionCallResult = __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCallResult).call(this);
-    if (finalFunctionCallResult != null)
-      this._emit("finalFunctionCallResult", finalFunctionCallResult);
-    if (this._chatCompletions.some((c) => c.usage)) {
-      this._emit("totalUsage", __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_calculateTotalUsage).call(this));
-    }
-  }
-  async _createChatCompletion(client, params, options) {
-    const signal = options?.signal;
-    if (signal) {
-      if (signal.aborted)
-        this.controller.abort();
-      signal.addEventListener("abort", () => this.controller.abort());
-    }
-    __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_validateParams).call(this, params);
-    const chatCompletion = await client.chat.completions.create({ ...params, stream: false }, { ...options, signal: this.controller.signal });
-    this._connected();
-    return this._addChatCompletion(parseChatCompletion(chatCompletion, params));
-  }
-  async _runChatCompletion(client, params, options) {
-    for (const message of params.messages) {
-      this._addMessage(message, false);
-    }
-    return await this._createChatCompletion(client, params, options);
-  }
-  async _runFunctions(client, params, options) {
-    const role = "function";
-    const { function_call = "auto", stream, ...restParams } = params;
-    const singleFunctionToCall = typeof function_call !== "string" && function_call?.name;
-    const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
-    const functionsByName = {};
-    for (const f of params.functions) {
-      functionsByName[f.name || f.function.name] = f;
-    }
-    const functions = params.functions.map((f) => ({
-      name: f.name || f.function.name,
-      parameters: f.parameters,
-      description: f.description
-    }));
-    for (const message of params.messages) {
-      this._addMessage(message, false);
-    }
-    for (let i = 0;i < maxChatCompletions; ++i) {
-      const chatCompletion = await this._createChatCompletion(client, {
-        ...restParams,
-        function_call,
-        functions,
-        messages: [...this.messages]
-      }, options);
-      const message = chatCompletion.choices[0]?.message;
-      if (!message) {
-        throw new OpenAIError(`missing message in ChatCompletion response`);
-      }
-      if (!message.function_call)
-        return;
-      const { name, arguments: args } = message.function_call;
-      const fn = functionsByName[name];
-      if (!fn) {
-        const content2 = `Invalid function_call: ${JSON.stringify(name)}. Available options are: ${functions.map((f) => JSON.stringify(f.name)).join(", ")}. Please try again`;
-        this._addMessage({ role, name, content: content2 });
-        continue;
-      } else if (singleFunctionToCall && singleFunctionToCall !== name) {
-        const content2 = `Invalid function_call: ${JSON.stringify(name)}. ${JSON.stringify(singleFunctionToCall)} requested. Please try again`;
-        this._addMessage({ role, name, content: content2 });
-        continue;
-      }
-      let parsed;
-      try {
-        parsed = isRunnableFunctionWithParse(fn) ? await fn.parse(args) : args;
-      } catch (error7) {
-        this._addMessage({
-          role,
-          name,
-          content: error7 instanceof Error ? error7.message : String(error7)
-        });
-        continue;
-      }
-      const rawContent = await fn.function(parsed, this);
-      const content = __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_stringifyFunctionCallResult).call(this, rawContent);
-      this._addMessage({ role, name, content });
-      if (singleFunctionToCall)
-        return;
-    }
-  }
-  async _runTools(client, params, options) {
-    const role = "tool";
-    const { tool_choice = "auto", stream, ...restParams } = params;
-    const singleFunctionToCall = typeof tool_choice !== "string" && tool_choice?.function?.name;
-    const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
-    const inputTools = params.tools.map((tool) => {
-      if (isAutoParsableTool(tool)) {
-        if (!tool.$callback) {
-          throw new OpenAIError("Tool given to `.runTools()` that does not have an associated function");
-        }
-        return {
-          type: "function",
-          function: {
-            function: tool.$callback,
-            name: tool.function.name,
-            description: tool.function.description || "",
-            parameters: tool.function.parameters,
-            parse: tool.$parseRaw,
-            strict: true
-          }
-        };
-      }
-      return tool;
-    });
-    const functionsByName = {};
-    for (const f of inputTools) {
-      if (f.type === "function") {
-        functionsByName[f.function.name || f.function.function.name] = f.function;
-      }
-    }
-    const tools = "tools" in params ? inputTools.map((t) => t.type === "function" ? {
-      type: "function",
-      function: {
-        name: t.function.name || t.function.function.name,
-        parameters: t.function.parameters,
-        description: t.function.description,
-        strict: t.function.strict
-      }
-    } : t) : undefined;
-    for (const message of params.messages) {
-      this._addMessage(message, false);
-    }
-    for (let i = 0;i < maxChatCompletions; ++i) {
-      const chatCompletion = await this._createChatCompletion(client, {
-        ...restParams,
-        tool_choice,
-        tools,
-        messages: [...this.messages]
-      }, options);
-      const message = chatCompletion.choices[0]?.message;
-      if (!message) {
-        throw new OpenAIError(`missing message in ChatCompletion response`);
-      }
-      if (!message.tool_calls?.length) {
-        return;
-      }
-      for (const tool_call of message.tool_calls) {
-        if (tool_call.type !== "function")
-          continue;
-        const tool_call_id = tool_call.id;
-        const { name, arguments: args } = tool_call.function;
-        const fn = functionsByName[name];
-        if (!fn) {
-          const content2 = `Invalid tool_call: ${JSON.stringify(name)}. Available options are: ${Object.keys(functionsByName).map((name2) => JSON.stringify(name2)).join(", ")}. Please try again`;
-          this._addMessage({ role, tool_call_id, content: content2 });
-          continue;
-        } else if (singleFunctionToCall && singleFunctionToCall !== name) {
-          const content2 = `Invalid tool_call: ${JSON.stringify(name)}. ${JSON.stringify(singleFunctionToCall)} requested. Please try again`;
-          this._addMessage({ role, tool_call_id, content: content2 });
-          continue;
-        }
-        let parsed;
-        try {
-          parsed = isRunnableFunctionWithParse(fn) ? await fn.parse(args) : args;
-        } catch (error7) {
-          const content2 = error7 instanceof Error ? error7.message : String(error7);
-          this._addMessage({ role, tool_call_id, content: content2 });
-          continue;
-        }
-        const rawContent = await fn.function(parsed, this);
-        const content = __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_stringifyFunctionCallResult).call(this, rawContent);
-        this._addMessage({ role, tool_call_id, content });
-        if (singleFunctionToCall) {
-          return;
-        }
-      }
-    }
-    return;
-  }
-}
-_AbstractChatCompletionRunner_instances = new WeakSet, _AbstractChatCompletionRunner_getFinalContent = function _AbstractChatCompletionRunner_getFinalContent2() {
-  return __classPrivateFieldGet3(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this).content ?? null;
-}, _AbstractChatCompletionRunner_getFinalMessage = function _AbstractChatCompletionRunner_getFinalMessage2() {
-  let i = this.messages.length;
-  while (i-- > 0) {
-    const message = this.messages[i];
-    if (isAssistantMessage(message)) {
-      const { function_call, ...rest } = message;
-      const ret = {
-        ...rest,
-        content: message.content ?? null,
-        refusal: message.refusal ?? null
-      };
-      if (function_call) {
-        ret.function_call = function_call;
-      }
-      return ret;
-    }
-  }
-  throw new OpenAIError("stream ended without producing a ChatCompletionMessage with role=assistant");
-}, _AbstractChatCompletionRunner_getFinalFunctionCall = function _AbstractChatCompletionRunner_getFinalFunctionCall2() {
-  for (let i = this.messages.length - 1;i >= 0; i--) {
-    const message = this.messages[i];
-    if (isAssistantMessage(message) && message?.function_call) {
-      return message.function_call;
-    }
-    if (isAssistantMessage(message) && message?.tool_calls?.length) {
-      return message.tool_calls.at(-1)?.function;
-    }
-  }
-  return;
-}, _AbstractChatCompletionRunner_getFinalFunctionCallResult = function _AbstractChatCompletionRunner_getFinalFunctionCallResult2() {
-  for (let i = this.messages.length - 1;i >= 0; i--) {
-    const message = this.messages[i];
-    if (isFunctionMessage(message) && message.content != null) {
-      return message.content;
-    }
-    if (isToolMessage(message) && message.content != null && typeof message.content === "string" && this.messages.some((x) => x.role === "assistant" && x.tool_calls?.some((y) => y.type === "function" && y.id === message.tool_call_id))) {
-      return message.content;
-    }
-  }
-  return;
-}, _AbstractChatCompletionRunner_calculateTotalUsage = function _AbstractChatCompletionRunner_calculateTotalUsage2() {
-  const total = {
-    completion_tokens: 0,
-    prompt_tokens: 0,
-    total_tokens: 0
-  };
-  for (const { usage } of this._chatCompletions) {
-    if (usage) {
-      total.completion_tokens += usage.completion_tokens;
-      total.prompt_tokens += usage.prompt_tokens;
-      total.total_tokens += usage.total_tokens;
-    }
-  }
-  return total;
-}, _AbstractChatCompletionRunner_validateParams = function _AbstractChatCompletionRunner_validateParams2(params) {
-  if (params.n != null && params.n > 1) {
-    throw new OpenAIError("ChatCompletion convenience helpers only support n=1 at this time. To use n>1, please use chat.completions.create() directly.");
-  }
-}, _AbstractChatCompletionRunner_stringifyFunctionCallResult = function _AbstractChatCompletionRunner_stringifyFunctionCallResult2(rawContent) {
-  return typeof rawContent === "string" ? rawContent : rawContent === undefined ? "undefined" : JSON.stringify(rawContent);
-};
-
-// node_modules/openai/lib/ChatCompletionRunner.mjs
-class ChatCompletionRunner extends AbstractChatCompletionRunner {
-  static runFunctions(client, params, options) {
-    const runner = new ChatCompletionRunner;
-    const opts = {
-      ...options,
-      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runFunctions" }
-    };
-    runner._run(() => runner._runFunctions(client, params, opts));
-    return runner;
-  }
-  static runTools(client, params, options) {
-    const runner = new ChatCompletionRunner;
-    const opts = {
-      ...options,
-      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runTools" }
-    };
-    runner._run(() => runner._runTools(client, params, opts));
-    return runner;
-  }
-  _addMessage(message) {
-    super._addMessage(message);
-    if (isAssistantMessage(message) && message.content) {
-      this._emit("content", message.content);
-    }
-  }
-}
-
-// node_modules/openai/_vendor/partial-json-parser/parser.mjs
-var tokenize = (input) => {
-  let current = 0;
-  let tokens = [];
-  while (current < input.length) {
-    let char = input[current];
-    if (char === "\\") {
-      current++;
-      continue;
-    }
-    if (char === "{") {
-      tokens.push({
-        type: "brace",
-        value: "{"
-      });
-      current++;
-      continue;
-    }
-    if (char === "}") {
-      tokens.push({
-        type: "brace",
-        value: "}"
-      });
-      current++;
-      continue;
-    }
-    if (char === "[") {
-      tokens.push({
-        type: "paren",
-        value: "["
-      });
-      current++;
-      continue;
-    }
-    if (char === "]") {
-      tokens.push({
-        type: "paren",
-        value: "]"
-      });
-      current++;
-      continue;
-    }
-    if (char === ":") {
-      tokens.push({
-        type: "separator",
-        value: ":"
-      });
-      current++;
-      continue;
-    }
-    if (char === ",") {
-      tokens.push({
-        type: "delimiter",
-        value: ","
-      });
-      current++;
-      continue;
-    }
-    if (char === '"') {
-      let value = "";
-      let danglingQuote = false;
-      char = input[++current];
-      while (char !== '"') {
-        if (current === input.length) {
-          danglingQuote = true;
-          break;
-        }
-        if (char === "\\") {
-          current++;
-          if (current === input.length) {
-            danglingQuote = true;
-            break;
-          }
-          value += char + input[current];
-          char = input[++current];
-        } else {
-          value += char;
-          char = input[++current];
-        }
-      }
-      char = input[++current];
-      if (!danglingQuote) {
-        tokens.push({
-          type: "string",
-          value
-        });
-      }
-      continue;
-    }
-    let WHITESPACE = /\s/;
-    if (char && WHITESPACE.test(char)) {
-      current++;
-      continue;
-    }
-    let NUMBERS = /[0-9]/;
-    if (char && NUMBERS.test(char) || char === "-" || char === ".") {
-      let value = "";
-      if (char === "-") {
-        value += char;
-        char = input[++current];
-      }
-      while (char && NUMBERS.test(char) || char === ".") {
-        value += char;
-        char = input[++current];
-      }
-      tokens.push({
-        type: "number",
-        value
-      });
-      continue;
-    }
-    let LETTERS = /[a-z]/i;
-    if (char && LETTERS.test(char)) {
-      let value = "";
-      while (char && LETTERS.test(char)) {
-        if (current === input.length) {
-          break;
-        }
-        value += char;
-        char = input[++current];
-      }
-      if (value == "true" || value == "false" || value === "null") {
-        tokens.push({
-          type: "name",
-          value
-        });
-      } else {
-        current++;
-        continue;
-      }
-      continue;
-    }
-    current++;
-  }
-  return tokens;
-};
-var strip = (tokens) => {
-  if (tokens.length === 0) {
-    return tokens;
-  }
-  let lastToken = tokens[tokens.length - 1];
-  switch (lastToken.type) {
-    case "separator":
-      tokens = tokens.slice(0, tokens.length - 1);
-      return strip(tokens);
-      break;
-    case "number":
-      let lastCharacterOfLastToken = lastToken.value[lastToken.value.length - 1];
-      if (lastCharacterOfLastToken === "." || lastCharacterOfLastToken === "-") {
-        tokens = tokens.slice(0, tokens.length - 1);
-        return strip(tokens);
-      }
-    case "string":
-      let tokenBeforeTheLastToken = tokens[tokens.length - 2];
-      if (tokenBeforeTheLastToken?.type === "delimiter") {
-        tokens = tokens.slice(0, tokens.length - 1);
-        return strip(tokens);
-      } else if (tokenBeforeTheLastToken?.type === "brace" && tokenBeforeTheLastToken.value === "{") {
-        tokens = tokens.slice(0, tokens.length - 1);
-        return strip(tokens);
-      }
-      break;
-    case "delimiter":
-      tokens = tokens.slice(0, tokens.length - 1);
-      return strip(tokens);
-      break;
-  }
-  return tokens;
-};
-var unstrip = (tokens) => {
-  let tail = [];
-  tokens.map((token) => {
-    if (token.type === "brace") {
-      if (token.value === "{") {
-        tail.push("}");
-      } else {
-        tail.splice(tail.lastIndexOf("}"), 1);
-      }
-    }
-    if (token.type === "paren") {
-      if (token.value === "[") {
-        tail.push("]");
-      } else {
-        tail.splice(tail.lastIndexOf("]"), 1);
-      }
-    }
-  });
-  if (tail.length > 0) {
-    tail.reverse().map((item) => {
-      if (item === "}") {
-        tokens.push({
-          type: "brace",
-          value: "}"
-        });
-      } else if (item === "]") {
-        tokens.push({
-          type: "paren",
-          value: "]"
-        });
-      }
-    });
-  }
-  return tokens;
-};
-var generate = (tokens) => {
-  let output = "";
-  tokens.map((token) => {
-    switch (token.type) {
-      case "string":
-        output += '"' + token.value + '"';
-        break;
-      default:
-        output += token.value;
-        break;
-    }
-  });
-  return output;
-};
-var partialParse = (input) => JSON.parse(generate(unstrip(strip(tokenize(input)))));
-
-// node_modules/openai/lib/ChatCompletionStream.mjs
-function finalizeChatCompletion(snapshot, params) {
-  const { id, choices, created, model, system_fingerprint, ...rest } = snapshot;
-  const completion = {
-    ...rest,
-    id,
-    choices: choices.map(({ message, finish_reason, index, logprobs, ...choiceRest }) => {
-      if (!finish_reason) {
-        throw new OpenAIError(`missing finish_reason for choice ${index}`);
-      }
-      const { content = null, function_call, tool_calls, ...messageRest } = message;
-      const role = message.role;
-      if (!role) {
-        throw new OpenAIError(`missing role for choice ${index}`);
-      }
-      if (function_call) {
-        const { arguments: args, name } = function_call;
-        if (args == null) {
-          throw new OpenAIError(`missing function_call.arguments for choice ${index}`);
-        }
-        if (!name) {
-          throw new OpenAIError(`missing function_call.name for choice ${index}`);
-        }
-        return {
-          ...choiceRest,
-          message: {
-            content,
-            function_call: { arguments: args, name },
-            role,
-            refusal: message.refusal ?? null
-          },
-          finish_reason,
-          index,
-          logprobs
-        };
-      }
-      if (tool_calls) {
-        return {
-          ...choiceRest,
-          index,
-          finish_reason,
-          logprobs,
-          message: {
-            ...messageRest,
-            role,
-            content,
-            refusal: message.refusal ?? null,
-            tool_calls: tool_calls.map((tool_call, i) => {
-              const { function: fn, type, id: id2, ...toolRest } = tool_call;
-              const { arguments: args, name, ...fnRest } = fn || {};
-              if (id2 == null) {
-                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].id\n${str(snapshot)}`);
-              }
-              if (type == null) {
-                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].type\n${str(snapshot)}`);
-              }
-              if (name == null) {
-                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].function.name\n${str(snapshot)}`);
-              }
-              if (args == null) {
-                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].function.arguments\n${str(snapshot)}`);
-              }
-              return { ...toolRest, id: id2, type, function: { ...fnRest, name, arguments: args } };
-            })
-          }
-        };
-      }
-      return {
-        ...choiceRest,
-        message: { ...messageRest, content, role, refusal: message.refusal ?? null },
-        finish_reason,
-        index,
-        logprobs
-      };
-    }),
-    created,
-    model,
-    object: "chat.completion",
-    ...system_fingerprint ? { system_fingerprint } : {}
-  };
-  return maybeParseChatCompletion(completion, params);
-}
-function str(x) {
-  return JSON.stringify(x);
-}
-function assertIsEmpty(obj) {
-  return;
-}
-function assertNever(_x) {
-}
-var __classPrivateFieldSet3 = function(receiver, state, value, kind2, f) {
-  if (kind2 === "m")
-    throw new TypeError("Private method is not writable");
-  if (kind2 === "a" && !f)
-    throw new TypeError("Private accessor was defined without a setter");
-  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
-    throw new TypeError("Cannot write private member to an object whose class did not declare it");
-  return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
-};
-var __classPrivateFieldGet4 = function(receiver, state, kind2, f) {
-  if (kind2 === "a" && !f)
-    throw new TypeError("Private accessor was defined without a getter");
-  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
-    throw new TypeError("Cannot read private member from an object whose class did not declare it");
-  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
-};
-var _ChatCompletionStream_instances;
-var _ChatCompletionStream_params;
-var _ChatCompletionStream_choiceEventStates;
-var _ChatCompletionStream_currentChatCompletionSnapshot;
-var _ChatCompletionStream_beginRequest;
-var _ChatCompletionStream_getChoiceEventState;
-var _ChatCompletionStream_addChunk;
-var _ChatCompletionStream_emitToolCallDoneEvent;
-var _ChatCompletionStream_emitContentDoneEvents;
-var _ChatCompletionStream_endRequest;
-var _ChatCompletionStream_getAutoParseableResponseFormat;
-var _ChatCompletionStream_accumulateChatCompletion;
-
-class ChatCompletionStream extends AbstractChatCompletionRunner {
-  constructor(params) {
-    super();
-    _ChatCompletionStream_instances.add(this);
-    _ChatCompletionStream_params.set(this, undefined);
-    _ChatCompletionStream_choiceEventStates.set(this, undefined);
-    _ChatCompletionStream_currentChatCompletionSnapshot.set(this, undefined);
-    __classPrivateFieldSet3(this, _ChatCompletionStream_params, params, "f");
-    __classPrivateFieldSet3(this, _ChatCompletionStream_choiceEventStates, [], "f");
-  }
-  get currentChatCompletionSnapshot() {
-    return __classPrivateFieldGet4(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
-  }
-  static fromReadableStream(stream) {
-    const runner = new ChatCompletionStream(null);
-    runner._run(() => runner._fromReadableStream(stream));
-    return runner;
-  }
-  static createChatCompletion(client, params, options) {
-    const runner = new ChatCompletionStream(params);
-    runner._run(() => runner._runChatCompletion(client, { ...params, stream: true }, { ...options, headers: { ...options?.headers, "X-Stainless-Helper-Method": "stream" } }));
-    return runner;
-  }
-  async _createChatCompletion(client, params, options) {
-    super._createChatCompletion;
-    const signal = options?.signal;
-    if (signal) {
-      if (signal.aborted)
-        this.controller.abort();
-      signal.addEventListener("abort", () => this.controller.abort());
-    }
-    __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_beginRequest).call(this);
-    const stream = await client.chat.completions.create({ ...params, stream: true }, { ...options, signal: this.controller.signal });
-    this._connected();
-    for await (const chunk of stream) {
-      __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_addChunk).call(this, chunk);
-    }
-    if (stream.controller.signal?.aborted) {
-      throw new APIUserAbortError;
-    }
-    return this._addChatCompletion(__classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
-  }
-  async _fromReadableStream(readableStream, options) {
-    const signal = options?.signal;
-    if (signal) {
-      if (signal.aborted)
-        this.controller.abort();
-      signal.addEventListener("abort", () => this.controller.abort());
-    }
-    __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_beginRequest).call(this);
-    this._connected();
-    const stream = Stream.fromReadableStream(readableStream, this.controller);
-    let chatId;
-    for await (const chunk of stream) {
-      if (chatId && chatId !== chunk.id) {
-        this._addChatCompletion(__classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
-      }
-      __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_addChunk).call(this, chunk);
-      chatId = chunk.id;
-    }
-    if (stream.controller.signal?.aborted) {
-      throw new APIUserAbortError;
-    }
-    return this._addChatCompletion(__classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
-  }
-  [(_ChatCompletionStream_params = new WeakMap, _ChatCompletionStream_choiceEventStates = new WeakMap, _ChatCompletionStream_currentChatCompletionSnapshot = new WeakMap, _ChatCompletionStream_instances = new WeakSet, _ChatCompletionStream_beginRequest = function _ChatCompletionStream_beginRequest() {
-    if (this.ended)
-      return;
-    __classPrivateFieldSet3(this, _ChatCompletionStream_currentChatCompletionSnapshot, undefined, "f");
-  }, _ChatCompletionStream_getChoiceEventState = function _ChatCompletionStream_getChoiceEventState(choice) {
-    let state = __classPrivateFieldGet4(this, _ChatCompletionStream_choiceEventStates, "f")[choice.index];
-    if (state) {
-      return state;
-    }
-    state = {
-      content_done: false,
-      refusal_done: false,
-      logprobs_content_done: false,
-      logprobs_refusal_done: false,
-      done_tool_calls: new Set,
-      current_tool_call_index: null
-    };
-    __classPrivateFieldGet4(this, _ChatCompletionStream_choiceEventStates, "f")[choice.index] = state;
-    return state;
-  }, _ChatCompletionStream_addChunk = function _ChatCompletionStream_addChunk(chunk) {
-    if (this.ended)
-      return;
-    const completion = __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_accumulateChatCompletion).call(this, chunk);
-    this._emit("chunk", chunk, completion);
-    for (const choice of chunk.choices) {
-      const choiceSnapshot = completion.choices[choice.index];
-      if (choice.delta.content != null && choiceSnapshot.message?.role === "assistant" && choiceSnapshot.message?.content) {
-        this._emit("content", choice.delta.content, choiceSnapshot.message.content);
-        this._emit("content.delta", {
-          delta: choice.delta.content,
-          snapshot: choiceSnapshot.message.content,
-          parsed: choiceSnapshot.message.parsed
-        });
-      }
-      if (choice.delta.refusal != null && choiceSnapshot.message?.role === "assistant" && choiceSnapshot.message?.refusal) {
-        this._emit("refusal.delta", {
-          delta: choice.delta.refusal,
-          snapshot: choiceSnapshot.message.refusal
-        });
-      }
-      if (choice.logprobs?.content != null && choiceSnapshot.message?.role === "assistant") {
-        this._emit("logprobs.content.delta", {
-          content: choice.logprobs?.content,
-          snapshot: choiceSnapshot.logprobs?.content ?? []
-        });
-      }
-      if (choice.logprobs?.refusal != null && choiceSnapshot.message?.role === "assistant") {
-        this._emit("logprobs.refusal.delta", {
-          refusal: choice.logprobs?.refusal,
-          snapshot: choiceSnapshot.logprobs?.refusal ?? []
-        });
-      }
-      const state = __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
-      if (choiceSnapshot.finish_reason) {
-        __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitContentDoneEvents).call(this, choiceSnapshot);
-        if (state.current_tool_call_index != null) {
-          __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitToolCallDoneEvent).call(this, choiceSnapshot, state.current_tool_call_index);
-        }
-      }
-      for (const toolCall of choice.delta.tool_calls ?? []) {
-        if (state.current_tool_call_index !== toolCall.index) {
-          __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitContentDoneEvents).call(this, choiceSnapshot);
-          if (state.current_tool_call_index != null) {
-            __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitToolCallDoneEvent).call(this, choiceSnapshot, state.current_tool_call_index);
-          }
-        }
-        state.current_tool_call_index = toolCall.index;
-      }
-      for (const toolCallDelta of choice.delta.tool_calls ?? []) {
-        const toolCallSnapshot = choiceSnapshot.message.tool_calls?.[toolCallDelta.index];
-        if (!toolCallSnapshot?.type) {
-          continue;
-        }
-        if (toolCallSnapshot?.type === "function") {
-          this._emit("tool_calls.function.arguments.delta", {
-            name: toolCallSnapshot.function?.name,
-            index: toolCallDelta.index,
-            arguments: toolCallSnapshot.function.arguments,
-            parsed_arguments: toolCallSnapshot.function.parsed_arguments,
-            arguments_delta: toolCallDelta.function?.arguments ?? ""
-          });
-        } else {
-          assertNever(toolCallSnapshot?.type);
-        }
-      }
-    }
-  }, _ChatCompletionStream_emitToolCallDoneEvent = function _ChatCompletionStream_emitToolCallDoneEvent(choiceSnapshot, toolCallIndex) {
-    const state = __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
-    if (state.done_tool_calls.has(toolCallIndex)) {
-      return;
-    }
-    const toolCallSnapshot = choiceSnapshot.message.tool_calls?.[toolCallIndex];
-    if (!toolCallSnapshot) {
-      throw new Error("no tool call snapshot");
-    }
-    if (!toolCallSnapshot.type) {
-      throw new Error("tool call snapshot missing `type`");
-    }
-    if (toolCallSnapshot.type === "function") {
-      const inputTool = __classPrivateFieldGet4(this, _ChatCompletionStream_params, "f")?.tools?.find((tool) => tool.type === "function" && tool.function.name === toolCallSnapshot.function.name);
-      this._emit("tool_calls.function.arguments.done", {
-        name: toolCallSnapshot.function.name,
-        index: toolCallIndex,
-        arguments: toolCallSnapshot.function.arguments,
-        parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCallSnapshot.function.arguments) : inputTool?.function.strict ? JSON.parse(toolCallSnapshot.function.arguments) : null
-      });
-    } else {
-      assertNever(toolCallSnapshot.type);
-    }
-  }, _ChatCompletionStream_emitContentDoneEvents = function _ChatCompletionStream_emitContentDoneEvents(choiceSnapshot) {
-    const state = __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
-    if (choiceSnapshot.message.content && !state.content_done) {
-      state.content_done = true;
-      const responseFormat = __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this);
-      this._emit("content.done", {
-        content: choiceSnapshot.message.content,
-        parsed: responseFormat ? responseFormat.$parseRaw(choiceSnapshot.message.content) : null
-      });
-    }
-    if (choiceSnapshot.message.refusal && !state.refusal_done) {
-      state.refusal_done = true;
-      this._emit("refusal.done", { refusal: choiceSnapshot.message.refusal });
-    }
-    if (choiceSnapshot.logprobs?.content && !state.logprobs_content_done) {
-      state.logprobs_content_done = true;
-      this._emit("logprobs.content.done", { content: choiceSnapshot.logprobs.content });
-    }
-    if (choiceSnapshot.logprobs?.refusal && !state.logprobs_refusal_done) {
-      state.logprobs_refusal_done = true;
-      this._emit("logprobs.refusal.done", { refusal: choiceSnapshot.logprobs.refusal });
-    }
-  }, _ChatCompletionStream_endRequest = function _ChatCompletionStream_endRequest() {
-    if (this.ended) {
-      throw new OpenAIError(`stream has ended, this shouldn't happen`);
-    }
-    const snapshot = __classPrivateFieldGet4(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
-    if (!snapshot) {
-      throw new OpenAIError(`request ended without sending any chunks`);
-    }
-    __classPrivateFieldSet3(this, _ChatCompletionStream_currentChatCompletionSnapshot, undefined, "f");
-    __classPrivateFieldSet3(this, _ChatCompletionStream_choiceEventStates, [], "f");
-    return finalizeChatCompletion(snapshot, __classPrivateFieldGet4(this, _ChatCompletionStream_params, "f"));
-  }, _ChatCompletionStream_getAutoParseableResponseFormat = function _ChatCompletionStream_getAutoParseableResponseFormat() {
-    const responseFormat = __classPrivateFieldGet4(this, _ChatCompletionStream_params, "f")?.response_format;
-    if (isAutoParsableResponseFormat(responseFormat)) {
-      return responseFormat;
-    }
-    return null;
-  }, _ChatCompletionStream_accumulateChatCompletion = function _ChatCompletionStream_accumulateChatCompletion(chunk) {
-    var _a, _b, _c, _d;
-    let snapshot = __classPrivateFieldGet4(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
-    const { choices, ...rest } = chunk;
-    if (!snapshot) {
-      snapshot = __classPrivateFieldSet3(this, _ChatCompletionStream_currentChatCompletionSnapshot, {
-        ...rest,
-        choices: []
-      }, "f");
-    } else {
-      Object.assign(snapshot, rest);
-    }
-    for (const { delta, finish_reason, index, logprobs = null, ...other } of chunk.choices) {
-      let choice = snapshot.choices[index];
-      if (!choice) {
-        choice = snapshot.choices[index] = { finish_reason, index, message: {}, logprobs, ...other };
-      }
-      if (logprobs) {
-        if (!choice.logprobs) {
-          choice.logprobs = Object.assign({}, logprobs);
-        } else {
-          const { content: content2, refusal: refusal2, ...rest3 } = logprobs;
-          assertIsEmpty(rest3);
-          Object.assign(choice.logprobs, rest3);
-          if (content2) {
-            (_a = choice.logprobs).content ?? (_a.content = []);
-            choice.logprobs.content.push(...content2);
-          }
-          if (refusal2) {
-            (_b = choice.logprobs).refusal ?? (_b.refusal = []);
-            choice.logprobs.refusal.push(...refusal2);
-          }
-        }
-      }
-      if (finish_reason) {
-        choice.finish_reason = finish_reason;
-        if (__classPrivateFieldGet4(this, _ChatCompletionStream_params, "f") && hasAutoParseableInput(__classPrivateFieldGet4(this, _ChatCompletionStream_params, "f"))) {
-          if (finish_reason === "length") {
-            throw new LengthFinishReasonError;
-          }
-          if (finish_reason === "content_filter") {
-            throw new ContentFilterFinishReasonError;
-          }
-        }
-      }
-      Object.assign(choice, other);
-      if (!delta)
-        continue;
-      const { content, refusal, function_call, role, tool_calls, ...rest2 } = delta;
-      assertIsEmpty(rest2);
-      Object.assign(choice.message, rest2);
-      if (refusal) {
-        choice.message.refusal = (choice.message.refusal || "") + refusal;
-      }
-      if (role)
-        choice.message.role = role;
-      if (function_call) {
-        if (!choice.message.function_call) {
-          choice.message.function_call = function_call;
-        } else {
-          if (function_call.name)
-            choice.message.function_call.name = function_call.name;
-          if (function_call.arguments) {
-            (_c = choice.message.function_call).arguments ?? (_c.arguments = "");
-            choice.message.function_call.arguments += function_call.arguments;
-          }
-        }
-      }
-      if (content) {
-        choice.message.content = (choice.message.content || "") + content;
-        if (!choice.message.refusal && __classPrivateFieldGet4(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this)) {
-          choice.message.parsed = partialParse(choice.message.content);
-        }
-      }
-      if (tool_calls) {
-        if (!choice.message.tool_calls)
-          choice.message.tool_calls = [];
-        for (const { index: index2, id, type, function: fn, ...rest3 } of tool_calls) {
-          const tool_call = (_d = choice.message.tool_calls)[index2] ?? (_d[index2] = {});
-          Object.assign(tool_call, rest3);
-          if (id)
-            tool_call.id = id;
-          if (type)
-            tool_call.type = type;
-          if (fn)
-            tool_call.function ?? (tool_call.function = { name: fn.name ?? "", arguments: "" });
-          if (fn?.name)
-            tool_call.function.name = fn.name;
-          if (fn?.arguments) {
-            tool_call.function.arguments += fn.arguments;
-            if (shouldParseToolCall(__classPrivateFieldGet4(this, _ChatCompletionStream_params, "f"), tool_call)) {
-              tool_call.function.parsed_arguments = partialParse(tool_call.function.arguments);
-            }
-          }
-        }
-      }
-    }
-    return snapshot;
-  }, Symbol.asyncIterator)]() {
-    const pushQueue = [];
-    const readQueue = [];
-    let done = false;
-    this.on("chunk", (chunk) => {
-      const reader = readQueue.shift();
-      if (reader) {
-        reader.resolve(chunk);
-      } else {
-        pushQueue.push(chunk);
-      }
-    });
-    this.on("end", () => {
-      done = true;
-      for (const reader of readQueue) {
-        reader.resolve(undefined);
-      }
-      readQueue.length = 0;
-    });
-    this.on("abort", (err) => {
-      done = true;
-      for (const reader of readQueue) {
-        reader.reject(err);
-      }
-      readQueue.length = 0;
-    });
-    this.on("error", (err) => {
-      done = true;
-      for (const reader of readQueue) {
-        reader.reject(err);
-      }
-      readQueue.length = 0;
-    });
-    return {
-      next: async () => {
-        if (!pushQueue.length) {
-          if (done) {
-            return { value: undefined, done: true };
-          }
-          return new Promise((resolve, reject) => readQueue.push({ resolve, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: undefined, done: true });
-        }
-        const chunk = pushQueue.shift();
-        return { value: chunk, done: false };
-      },
-      return: async () => {
-        this.abort();
-        return { value: undefined, done: true };
-      }
-    };
-  }
-  toReadableStream() {
-    const stream = new Stream(this[Symbol.asyncIterator].bind(this), this.controller);
-    return stream.toReadableStream();
-  }
-}
-
-// node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
-class ChatCompletionStreamingRunner extends ChatCompletionStream {
-  static fromReadableStream(stream) {
-    const runner = new ChatCompletionStreamingRunner(null);
-    runner._run(() => runner._fromReadableStream(stream));
-    return runner;
-  }
-  static runFunctions(client, params, options) {
-    const runner = new ChatCompletionStreamingRunner(null);
-    const opts = {
-      ...options,
-      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runFunctions" }
-    };
-    runner._run(() => runner._runFunctions(client, params, opts));
-    return runner;
-  }
-  static runTools(client, params, options) {
-    const runner = new ChatCompletionStreamingRunner(params);
-    const opts = {
-      ...options,
-      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runTools" }
-    };
-    runner._run(() => runner._runTools(client, params, opts));
-    return runner;
-  }
-}
-
-// node_modules/openai/resources/beta/chat/completions.mjs
-class Completions2 extends APIResource {
-  async parse(body, options) {
-    validateInputTools(body.tools);
-    const completion = await this._client.chat.completions.create(body, {
-      ...options,
-      headers: {
-        ...options?.headers,
-        "X-Stainless-Helper-Method": "beta.chat.completions.parse"
-      }
-    });
-    return parseChatCompletion(completion, body);
-  }
-  runFunctions(body, options) {
-    if (body.stream) {
-      return ChatCompletionStreamingRunner.runFunctions(this._client, body, options);
-    }
-    return ChatCompletionRunner.runFunctions(this._client, body, options);
-  }
-  runTools(body, options) {
-    if (body.stream) {
-      return ChatCompletionStreamingRunner.runTools(this._client, body, options);
-    }
-    return ChatCompletionRunner.runTools(this._client, body, options);
-  }
-  stream(body, options) {
-    return ChatCompletionStream.createChatCompletion(this._client, body, options);
-  }
-}
-
-// node_modules/openai/resources/beta/chat/chat.mjs
-class Chat2 extends APIResource {
-  constructor() {
-    super(...arguments);
-    this.completions = new Completions2(this._client);
-  }
-}
-(function(Chat3) {
-  Chat3.Completions = Completions2;
-})(Chat2 || (Chat2 = {}));
 
 // node_modules/openai/lib/AssistantStream.mjs
-var __classPrivateFieldGet5 = function(receiver, state, kind2, f) {
+var assertNever = function(_x) {
+};
+var __classPrivateFieldGet4 = function(receiver, state, kind2, f) {
   if (kind2 === "a" && !f)
     throw new TypeError("Private accessor was defined without a getter");
   if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
@@ -3038,12 +2211,12 @@ class AssistantStream extends EventStream {
     this._connected();
     const stream = Stream.fromReadableStream(readableStream, this.controller);
     for await (const event of stream) {
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
     }
     if (stream.controller.signal?.aborted) {
       throw new APIUserAbortError;
     }
-    return this._addRun(__classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    return this._addRun(__classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
   }
   toReadableStream() {
     const stream = new Stream(this[Symbol.asyncIterator].bind(this), this.controller);
@@ -3071,12 +2244,12 @@ class AssistantStream extends EventStream {
     });
     this._connected();
     for await (const event of stream) {
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
     }
     if (stream.controller.signal?.aborted) {
       throw new APIUserAbortError;
     }
-    return this._addRun(__classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    return this._addRun(__classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
   }
   static createThreadAssistantStream(params, thread, options) {
     const runner = new AssistantStream;
@@ -3095,30 +2268,30 @@ class AssistantStream extends EventStream {
     return runner;
   }
   currentEvent() {
-    return __classPrivateFieldGet5(this, _AssistantStream_currentEvent, "f");
+    return __classPrivateFieldGet4(this, _AssistantStream_currentEvent, "f");
   }
   currentRun() {
-    return __classPrivateFieldGet5(this, _AssistantStream_currentRunSnapshot, "f");
+    return __classPrivateFieldGet4(this, _AssistantStream_currentRunSnapshot, "f");
   }
   currentMessageSnapshot() {
-    return __classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f");
+    return __classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f");
   }
   currentRunStepSnapshot() {
-    return __classPrivateFieldGet5(this, _AssistantStream_currentRunStepSnapshot, "f");
+    return __classPrivateFieldGet4(this, _AssistantStream_currentRunStepSnapshot, "f");
   }
   async finalRunSteps() {
     await this.done();
-    return Object.values(__classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f"));
+    return Object.values(__classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f"));
   }
   async finalMessages() {
     await this.done();
-    return Object.values(__classPrivateFieldGet5(this, _AssistantStream_messageSnapshots, "f"));
+    return Object.values(__classPrivateFieldGet4(this, _AssistantStream_messageSnapshots, "f"));
   }
   async finalRun() {
     await this.done();
-    if (!__classPrivateFieldGet5(this, _AssistantStream_finalRun, "f"))
+    if (!__classPrivateFieldGet4(this, _AssistantStream_finalRun, "f"))
       throw Error("Final run was not received.");
-    return __classPrivateFieldGet5(this, _AssistantStream_finalRun, "f");
+    return __classPrivateFieldGet4(this, _AssistantStream_finalRun, "f");
   }
   async _createThreadAssistantStream(thread, params, options) {
     const signal = options?.signal;
@@ -3131,12 +2304,12 @@ class AssistantStream extends EventStream {
     const stream = await thread.createAndRun(body, { ...options, signal: this.controller.signal });
     this._connected();
     for await (const event of stream) {
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
     }
     if (stream.controller.signal?.aborted) {
       throw new APIUserAbortError;
     }
-    return this._addRun(__classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    return this._addRun(__classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
   }
   async _createAssistantStream(run, threadId, params, options) {
     const signal = options?.signal;
@@ -3149,12 +2322,12 @@ class AssistantStream extends EventStream {
     const stream = await run.create(threadId, body, { ...options, signal: this.controller.signal });
     this._connected();
     for await (const event of stream) {
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_addEvent).call(this, event);
     }
     if (stream.controller.signal?.aborted) {
       throw new APIUserAbortError;
     }
-    return this._addRun(__classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
+    return this._addRun(__classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_endRequest).call(this));
   }
   static accumulateDelta(acc, delta) {
     for (const [key, deltaValue] of Object.entries(delta)) {
@@ -3182,6 +2355,26 @@ class AssistantStream extends EventStream {
           accValue.push(...deltaValue);
           continue;
         }
+        for (const deltaEntry of deltaValue) {
+          if (!isObj(deltaEntry)) {
+            throw new Error(`Expected array delta entry to be an object but got: ${deltaEntry}`);
+          }
+          const index = deltaEntry["index"];
+          if (index == null) {
+            console.error(deltaEntry);
+            throw new Error("Expected array delta entry to have an `index` property");
+          }
+          if (typeof index !== "number") {
+            throw new Error(`Expected array delta entry \`index\` property to be a number but got ${index}`);
+          }
+          const accEntry = accValue[index];
+          if (accEntry == null) {
+            accValue.push(deltaEntry);
+          } else {
+            accValue[index] = this.accumulateDelta(accEntry, deltaEntry);
+          }
+        }
+        continue;
       } else {
         throw Error(`Unhandled record type: ${key}, deltaValue: ${deltaValue}, accValue: ${accValue}`);
       }
@@ -3206,7 +2399,7 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
   if (this.ended)
     return;
   __classPrivateFieldSet4(this, _AssistantStream_currentEvent, event, "f");
-  __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_handleEvent).call(this, event);
+  __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_handleEvent).call(this, event);
   switch (event.event) {
     case "thread.created":
       break;
@@ -3215,11 +2408,12 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
     case "thread.run.in_progress":
     case "thread.run.requires_action":
     case "thread.run.completed":
+    case "thread.run.incomplete":
     case "thread.run.failed":
     case "thread.run.cancelling":
     case "thread.run.cancelled":
     case "thread.run.expired":
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_handleRun).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_handleRun).call(this, event);
       break;
     case "thread.run.step.created":
     case "thread.run.step.in_progress":
@@ -3228,29 +2422,31 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
     case "thread.run.step.failed":
     case "thread.run.step.cancelled":
     case "thread.run.step.expired":
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_handleRunStep).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_handleRunStep).call(this, event);
       break;
     case "thread.message.created":
     case "thread.message.in_progress":
     case "thread.message.delta":
     case "thread.message.completed":
     case "thread.message.incomplete":
-      __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_handleMessage).call(this, event);
+      __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_handleMessage).call(this, event);
       break;
     case "error":
       throw new Error("Encountered an error event in event processing - errors should be processed earlier");
+    default:
+      assertNever(event);
   }
 }, _AssistantStream_endRequest = function _AssistantStream_endRequest2() {
   if (this.ended) {
     throw new OpenAIError(`stream has ended, this shouldn't happen`);
   }
-  if (!__classPrivateFieldGet5(this, _AssistantStream_finalRun, "f"))
+  if (!__classPrivateFieldGet4(this, _AssistantStream_finalRun, "f"))
     throw Error("Final run has not been received");
-  return __classPrivateFieldGet5(this, _AssistantStream_finalRun, "f");
+  return __classPrivateFieldGet4(this, _AssistantStream_finalRun, "f");
 }, _AssistantStream_handleMessage = function _AssistantStream_handleMessage2(event) {
-  const [accumulatedMessage, newContent] = __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_accumulateMessage).call(this, event, __classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f"));
+  const [accumulatedMessage, newContent] = __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_accumulateMessage).call(this, event, __classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f"));
   __classPrivateFieldSet4(this, _AssistantStream_messageSnapshot, accumulatedMessage, "f");
-  __classPrivateFieldGet5(this, _AssistantStream_messageSnapshots, "f")[accumulatedMessage.id] = accumulatedMessage;
+  __classPrivateFieldGet4(this, _AssistantStream_messageSnapshots, "f")[accumulatedMessage.id] = accumulatedMessage;
   for (const content of newContent) {
     const snapshotContent = accumulatedMessage.content[content.index];
     if (snapshotContent?.type == "text") {
@@ -3276,14 +2472,14 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
               throw Error("The snapshot associated with this text delta is not text or missing");
             }
           }
-          if (content.index != __classPrivateFieldGet5(this, _AssistantStream_currentContentIndex, "f")) {
-            if (__classPrivateFieldGet5(this, _AssistantStream_currentContent, "f")) {
-              switch (__classPrivateFieldGet5(this, _AssistantStream_currentContent, "f").type) {
+          if (content.index != __classPrivateFieldGet4(this, _AssistantStream_currentContentIndex, "f")) {
+            if (__classPrivateFieldGet4(this, _AssistantStream_currentContent, "f")) {
+              switch (__classPrivateFieldGet4(this, _AssistantStream_currentContent, "f").type) {
                 case "text":
-                  this._emit("textDone", __classPrivateFieldGet5(this, _AssistantStream_currentContent, "f").text, __classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f"));
+                  this._emit("textDone", __classPrivateFieldGet4(this, _AssistantStream_currentContent, "f").text, __classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f"));
                   break;
                 case "image_file":
-                  this._emit("imageFileDone", __classPrivateFieldGet5(this, _AssistantStream_currentContent, "f").image_file, __classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f"));
+                  this._emit("imageFileDone", __classPrivateFieldGet4(this, _AssistantStream_currentContent, "f").image_file, __classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f"));
                   break;
               }
             }
@@ -3295,26 +2491,26 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
       break;
     case "thread.message.completed":
     case "thread.message.incomplete":
-      if (__classPrivateFieldGet5(this, _AssistantStream_currentContentIndex, "f") !== undefined) {
-        const currentContent = event.data.content[__classPrivateFieldGet5(this, _AssistantStream_currentContentIndex, "f")];
+      if (__classPrivateFieldGet4(this, _AssistantStream_currentContentIndex, "f") !== undefined) {
+        const currentContent = event.data.content[__classPrivateFieldGet4(this, _AssistantStream_currentContentIndex, "f")];
         if (currentContent) {
           switch (currentContent.type) {
             case "image_file":
-              this._emit("imageFileDone", currentContent.image_file, __classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f"));
+              this._emit("imageFileDone", currentContent.image_file, __classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f"));
               break;
             case "text":
-              this._emit("textDone", currentContent.text, __classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f"));
+              this._emit("textDone", currentContent.text, __classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f"));
               break;
           }
         }
       }
-      if (__classPrivateFieldGet5(this, _AssistantStream_messageSnapshot, "f")) {
+      if (__classPrivateFieldGet4(this, _AssistantStream_messageSnapshot, "f")) {
         this._emit("messageDone", event.data);
       }
       __classPrivateFieldSet4(this, _AssistantStream_messageSnapshot, undefined, "f");
   }
 }, _AssistantStream_handleRunStep = function _AssistantStream_handleRunStep2(event) {
-  const accumulatedRunStep = __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_accumulateRunStep).call(this, event);
+  const accumulatedRunStep = __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_accumulateRunStep).call(this, event);
   __classPrivateFieldSet4(this, _AssistantStream_currentRunStepSnapshot, accumulatedRunStep, "f");
   switch (event.event) {
     case "thread.run.step.created":
@@ -3324,16 +2520,16 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
       const delta = event.data.delta;
       if (delta.step_details && delta.step_details.type == "tool_calls" && delta.step_details.tool_calls && accumulatedRunStep.step_details.type == "tool_calls") {
         for (const toolCall of delta.step_details.tool_calls) {
-          if (toolCall.index == __classPrivateFieldGet5(this, _AssistantStream_currentToolCallIndex, "f")) {
+          if (toolCall.index == __classPrivateFieldGet4(this, _AssistantStream_currentToolCallIndex, "f")) {
             this._emit("toolCallDelta", toolCall, accumulatedRunStep.step_details.tool_calls[toolCall.index]);
           } else {
-            if (__classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f")) {
-              this._emit("toolCallDone", __classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f"));
+            if (__classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f")) {
+              this._emit("toolCallDone", __classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f"));
             }
             __classPrivateFieldSet4(this, _AssistantStream_currentToolCallIndex, toolCall.index, "f");
             __classPrivateFieldSet4(this, _AssistantStream_currentToolCall, accumulatedRunStep.step_details.tool_calls[toolCall.index], "f");
-            if (__classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f"))
-              this._emit("toolCallCreated", __classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f"));
+            if (__classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f"))
+              this._emit("toolCallCreated", __classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f"));
           }
         }
       }
@@ -3346,8 +2542,8 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
       __classPrivateFieldSet4(this, _AssistantStream_currentRunStepSnapshot, undefined, "f");
       const details = event.data.step_details;
       if (details.type == "tool_calls") {
-        if (__classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f")) {
-          this._emit("toolCallDone", __classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f"));
+        if (__classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f")) {
+          this._emit("toolCallDone", __classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f"));
           __classPrivateFieldSet4(this, _AssistantStream_currentToolCall, undefined, "f");
         }
       }
@@ -3357,34 +2553,34 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
       break;
   }
 }, _AssistantStream_handleEvent = function _AssistantStream_handleEvent2(event) {
-  __classPrivateFieldGet5(this, _AssistantStream_events, "f").push(event);
+  __classPrivateFieldGet4(this, _AssistantStream_events, "f").push(event);
   this._emit("event", event);
 }, _AssistantStream_accumulateRunStep = function _AssistantStream_accumulateRunStep2(event) {
   switch (event.event) {
     case "thread.run.step.created":
-      __classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = event.data;
+      __classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = event.data;
       return event.data;
     case "thread.run.step.delta":
-      let snapshot = __classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
+      let snapshot = __classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
       if (!snapshot) {
         throw Error("Received a RunStepDelta before creation of a snapshot");
       }
       let data = event.data;
       if (data.delta) {
         const accumulated = AssistantStream.accumulateDelta(snapshot, data.delta);
-        __classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = accumulated;
+        __classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = accumulated;
       }
-      return __classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
+      return __classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
     case "thread.run.step.completed":
     case "thread.run.step.failed":
     case "thread.run.step.cancelled":
     case "thread.run.step.expired":
     case "thread.run.step.in_progress":
-      __classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = event.data;
+      __classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id] = event.data;
       break;
   }
-  if (__classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id])
-    return __classPrivateFieldGet5(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
+  if (__classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id])
+    return __classPrivateFieldGet4(this, _AssistantStream_runStepSnapshots, "f")[event.data.id];
   throw new Error("No snapshot available");
 }, _AssistantStream_accumulateMessage = function _AssistantStream_accumulateMessage2(event, snapshot) {
   let newContent = [];
@@ -3400,7 +2596,7 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
         for (const contentElement of data.delta.content) {
           if (contentElement.index in snapshot.content) {
             let currentContent = snapshot.content[contentElement.index];
-            snapshot.content[contentElement.index] = __classPrivateFieldGet5(this, _AssistantStream_instances, "m", _AssistantStream_accumulateContent).call(this, contentElement, currentContent);
+            snapshot.content[contentElement.index] = __classPrivateFieldGet4(this, _AssistantStream_instances, "m", _AssistantStream_accumulateContent).call(this, contentElement, currentContent);
           } else {
             snapshot.content[contentElement.index] = contentElement;
             newContent.push(contentElement);
@@ -3435,8 +2631,8 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
     case "thread.run.completed":
     case "thread.run.expired":
       __classPrivateFieldSet4(this, _AssistantStream_finalRun, event.data, "f");
-      if (__classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f")) {
-        this._emit("toolCallDone", __classPrivateFieldGet5(this, _AssistantStream_currentToolCall, "f"));
+      if (__classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f")) {
+        this._emit("toolCallDone", __classPrivateFieldGet4(this, _AssistantStream_currentToolCall, "f"));
         __classPrivateFieldSet4(this, _AssistantStream_currentToolCall, undefined, "f");
       }
       break;
@@ -3445,8 +2641,1322 @@ _AssistantStream_addEvent = function _AssistantStream_addEvent2(event) {
   }
 };
 
+// node_modules/openai/resources/beta/assistants.mjs
+class Assistants extends APIResource {
+  create(body, options) {
+    return this._client.post("/assistants", {
+      body,
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+  retrieve(assistantId, options) {
+    return this._client.get(`/assistants/${assistantId}`, {
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+  update(assistantId, body, options) {
+    return this._client.post(`/assistants/${assistantId}`, {
+      body,
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+  list(query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list({}, query);
+    }
+    return this._client.getAPIList("/assistants", AssistantsPage, {
+      query,
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+  del(assistantId, options) {
+    return this._client.delete(`/assistants/${assistantId}`, {
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+}
+
+class AssistantsPage extends CursorPage {
+}
+Assistants.AssistantsPage = AssistantsPage;
+
+// node_modules/openai/lib/RunnableFunction.mjs
+function isRunnableFunctionWithParse(fn) {
+  return typeof fn.parse === "function";
+}
+
+// node_modules/openai/lib/chatCompletionUtils.mjs
+var isAssistantMessage = (message) => {
+  return message?.role === "assistant";
+};
+var isFunctionMessage = (message) => {
+  return message?.role === "function";
+};
+var isToolMessage = (message) => {
+  return message?.role === "tool";
+};
+
+// node_modules/openai/lib/parser.mjs
+function isAutoParsableResponseFormat(response_format) {
+  return response_format?.["$brand"] === "auto-parseable-response-format";
+}
+function isAutoParsableTool(tool) {
+  return tool?.["$brand"] === "auto-parseable-tool";
+}
+function maybeParseChatCompletion(completion, params) {
+  if (!params || !hasAutoParseableInput(params)) {
+    return {
+      ...completion,
+      choices: completion.choices.map((choice) => ({
+        ...choice,
+        message: {
+          ...choice.message,
+          parsed: null,
+          ...choice.message.tool_calls ? {
+            tool_calls: choice.message.tool_calls
+          } : undefined
+        }
+      }))
+    };
+  }
+  return parseChatCompletion(completion, params);
+}
+function parseChatCompletion(completion, params) {
+  const choices = completion.choices.map((choice) => {
+    if (choice.finish_reason === "length") {
+      throw new LengthFinishReasonError;
+    }
+    if (choice.finish_reason === "content_filter") {
+      throw new ContentFilterFinishReasonError;
+    }
+    return {
+      ...choice,
+      message: {
+        ...choice.message,
+        ...choice.message.tool_calls ? {
+          tool_calls: choice.message.tool_calls?.map((toolCall) => parseToolCall(params, toolCall)) ?? undefined
+        } : undefined,
+        parsed: choice.message.content && !choice.message.refusal ? parseResponseFormat(params, choice.message.content) : null
+      }
+    };
+  });
+  return { ...completion, choices };
+}
+var parseResponseFormat = function(params, content) {
+  if (params.response_format?.type !== "json_schema") {
+    return null;
+  }
+  if (params.response_format?.type === "json_schema") {
+    if ("$parseRaw" in params.response_format) {
+      const response_format = params.response_format;
+      return response_format.$parseRaw(content);
+    }
+    return JSON.parse(content);
+  }
+  return null;
+};
+var parseToolCall = function(params, toolCall) {
+  const inputTool = params.tools?.find((inputTool2) => inputTool2.function?.name === toolCall.function.name);
+  return {
+    ...toolCall,
+    function: {
+      ...toolCall.function,
+      parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCall.function.arguments) : inputTool?.function.strict ? JSON.parse(toolCall.function.arguments) : null
+    }
+  };
+};
+function shouldParseToolCall(params, toolCall) {
+  if (!params) {
+    return false;
+  }
+  const inputTool = params.tools?.find((inputTool2) => inputTool2.function?.name === toolCall.function.name);
+  return isAutoParsableTool(inputTool) || inputTool?.function.strict || false;
+}
+function hasAutoParseableInput(params) {
+  if (isAutoParsableResponseFormat(params.response_format)) {
+    return true;
+  }
+  return params.tools?.some((t) => isAutoParsableTool(t) || t.type === "function" && t.function.strict === true) ?? false;
+}
+function validateInputTools(tools) {
+  for (const tool of tools ?? []) {
+    if (tool.type !== "function") {
+      throw new OpenAIError(`Currently only \`function\` tool types support auto-parsing; Received \`${tool.type}\``);
+    }
+    if (tool.function.strict !== true) {
+      throw new OpenAIError(`The \`${tool.function.name}\` tool is not marked with \`strict: true\`. Only strict function tools can be auto-parsed`);
+    }
+  }
+}
+
+// node_modules/openai/lib/AbstractChatCompletionRunner.mjs
+var __classPrivateFieldGet5 = function(receiver, state, kind2, f) {
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a getter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot read private member from an object whose class did not declare it");
+  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _AbstractChatCompletionRunner_instances;
+var _AbstractChatCompletionRunner_getFinalContent;
+var _AbstractChatCompletionRunner_getFinalMessage;
+var _AbstractChatCompletionRunner_getFinalFunctionCall;
+var _AbstractChatCompletionRunner_getFinalFunctionCallResult;
+var _AbstractChatCompletionRunner_calculateTotalUsage;
+var _AbstractChatCompletionRunner_validateParams;
+var _AbstractChatCompletionRunner_stringifyFunctionCallResult;
+var DEFAULT_MAX_CHAT_COMPLETIONS = 10;
+
+class AbstractChatCompletionRunner extends EventStream {
+  constructor() {
+    super(...arguments);
+    _AbstractChatCompletionRunner_instances.add(this);
+    this._chatCompletions = [];
+    this.messages = [];
+  }
+  _addChatCompletion(chatCompletion) {
+    this._chatCompletions.push(chatCompletion);
+    this._emit("chatCompletion", chatCompletion);
+    const message = chatCompletion.choices[0]?.message;
+    if (message)
+      this._addMessage(message);
+    return chatCompletion;
+  }
+  _addMessage(message, emit = true) {
+    if (!("content" in message))
+      message.content = null;
+    this.messages.push(message);
+    if (emit) {
+      this._emit("message", message);
+      if ((isFunctionMessage(message) || isToolMessage(message)) && message.content) {
+        this._emit("functionCallResult", message.content);
+      } else if (isAssistantMessage(message) && message.function_call) {
+        this._emit("functionCall", message.function_call);
+      } else if (isAssistantMessage(message) && message.tool_calls) {
+        for (const tool_call of message.tool_calls) {
+          if (tool_call.type === "function") {
+            this._emit("functionCall", tool_call.function);
+          }
+        }
+      }
+    }
+  }
+  async finalChatCompletion() {
+    await this.done();
+    const completion = this._chatCompletions[this._chatCompletions.length - 1];
+    if (!completion)
+      throw new OpenAIError("stream ended without producing a ChatCompletion");
+    return completion;
+  }
+  async finalContent() {
+    await this.done();
+    return __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalContent).call(this);
+  }
+  async finalMessage() {
+    await this.done();
+    return __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this);
+  }
+  async finalFunctionCall() {
+    await this.done();
+    return __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCall).call(this);
+  }
+  async finalFunctionCallResult() {
+    await this.done();
+    return __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCallResult).call(this);
+  }
+  async totalUsage() {
+    await this.done();
+    return __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_calculateTotalUsage).call(this);
+  }
+  allChatCompletions() {
+    return [...this._chatCompletions];
+  }
+  _emitFinal() {
+    const completion = this._chatCompletions[this._chatCompletions.length - 1];
+    if (completion)
+      this._emit("finalChatCompletion", completion);
+    const finalMessage = __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this);
+    if (finalMessage)
+      this._emit("finalMessage", finalMessage);
+    const finalContent = __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalContent).call(this);
+    if (finalContent)
+      this._emit("finalContent", finalContent);
+    const finalFunctionCall = __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCall).call(this);
+    if (finalFunctionCall)
+      this._emit("finalFunctionCall", finalFunctionCall);
+    const finalFunctionCallResult = __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalFunctionCallResult).call(this);
+    if (finalFunctionCallResult != null)
+      this._emit("finalFunctionCallResult", finalFunctionCallResult);
+    if (this._chatCompletions.some((c) => c.usage)) {
+      this._emit("totalUsage", __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_calculateTotalUsage).call(this));
+    }
+  }
+  async _createChatCompletion(client, params, options) {
+    const signal = options?.signal;
+    if (signal) {
+      if (signal.aborted)
+        this.controller.abort();
+      signal.addEventListener("abort", () => this.controller.abort());
+    }
+    __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_validateParams).call(this, params);
+    const chatCompletion = await client.chat.completions.create({ ...params, stream: false }, { ...options, signal: this.controller.signal });
+    this._connected();
+    return this._addChatCompletion(parseChatCompletion(chatCompletion, params));
+  }
+  async _runChatCompletion(client, params, options) {
+    for (const message of params.messages) {
+      this._addMessage(message, false);
+    }
+    return await this._createChatCompletion(client, params, options);
+  }
+  async _runFunctions(client, params, options) {
+    const role = "function";
+    const { function_call = "auto", stream, ...restParams } = params;
+    const singleFunctionToCall = typeof function_call !== "string" && function_call?.name;
+    const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
+    const functionsByName = {};
+    for (const f of params.functions) {
+      functionsByName[f.name || f.function.name] = f;
+    }
+    const functions = params.functions.map((f) => ({
+      name: f.name || f.function.name,
+      parameters: f.parameters,
+      description: f.description
+    }));
+    for (const message of params.messages) {
+      this._addMessage(message, false);
+    }
+    for (let i = 0;i < maxChatCompletions; ++i) {
+      const chatCompletion = await this._createChatCompletion(client, {
+        ...restParams,
+        function_call,
+        functions,
+        messages: [...this.messages]
+      }, options);
+      const message = chatCompletion.choices[0]?.message;
+      if (!message) {
+        throw new OpenAIError(`missing message in ChatCompletion response`);
+      }
+      if (!message.function_call)
+        return;
+      const { name, arguments: args } = message.function_call;
+      const fn = functionsByName[name];
+      if (!fn) {
+        const content2 = `Invalid function_call: ${JSON.stringify(name)}. Available options are: ${functions.map((f) => JSON.stringify(f.name)).join(", ")}. Please try again`;
+        this._addMessage({ role, name, content: content2 });
+        continue;
+      } else if (singleFunctionToCall && singleFunctionToCall !== name) {
+        const content2 = `Invalid function_call: ${JSON.stringify(name)}. ${JSON.stringify(singleFunctionToCall)} requested. Please try again`;
+        this._addMessage({ role, name, content: content2 });
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = isRunnableFunctionWithParse(fn) ? await fn.parse(args) : args;
+      } catch (error9) {
+        this._addMessage({
+          role,
+          name,
+          content: error9 instanceof Error ? error9.message : String(error9)
+        });
+        continue;
+      }
+      const rawContent = await fn.function(parsed, this);
+      const content = __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_stringifyFunctionCallResult).call(this, rawContent);
+      this._addMessage({ role, name, content });
+      if (singleFunctionToCall)
+        return;
+    }
+  }
+  async _runTools(client, params, options) {
+    const role = "tool";
+    const { tool_choice = "auto", stream, ...restParams } = params;
+    const singleFunctionToCall = typeof tool_choice !== "string" && tool_choice?.function?.name;
+    const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
+    const inputTools = params.tools.map((tool) => {
+      if (isAutoParsableTool(tool)) {
+        if (!tool.$callback) {
+          throw new OpenAIError("Tool given to `.runTools()` that does not have an associated function");
+        }
+        return {
+          type: "function",
+          function: {
+            function: tool.$callback,
+            name: tool.function.name,
+            description: tool.function.description || "",
+            parameters: tool.function.parameters,
+            parse: tool.$parseRaw,
+            strict: true
+          }
+        };
+      }
+      return tool;
+    });
+    const functionsByName = {};
+    for (const f of inputTools) {
+      if (f.type === "function") {
+        functionsByName[f.function.name || f.function.function.name] = f.function;
+      }
+    }
+    const tools = "tools" in params ? inputTools.map((t) => t.type === "function" ? {
+      type: "function",
+      function: {
+        name: t.function.name || t.function.function.name,
+        parameters: t.function.parameters,
+        description: t.function.description,
+        strict: t.function.strict
+      }
+    } : t) : undefined;
+    for (const message of params.messages) {
+      this._addMessage(message, false);
+    }
+    for (let i = 0;i < maxChatCompletions; ++i) {
+      const chatCompletion = await this._createChatCompletion(client, {
+        ...restParams,
+        tool_choice,
+        tools,
+        messages: [...this.messages]
+      }, options);
+      const message = chatCompletion.choices[0]?.message;
+      if (!message) {
+        throw new OpenAIError(`missing message in ChatCompletion response`);
+      }
+      if (!message.tool_calls?.length) {
+        return;
+      }
+      for (const tool_call of message.tool_calls) {
+        if (tool_call.type !== "function")
+          continue;
+        const tool_call_id = tool_call.id;
+        const { name, arguments: args } = tool_call.function;
+        const fn = functionsByName[name];
+        if (!fn) {
+          const content2 = `Invalid tool_call: ${JSON.stringify(name)}. Available options are: ${Object.keys(functionsByName).map((name2) => JSON.stringify(name2)).join(", ")}. Please try again`;
+          this._addMessage({ role, tool_call_id, content: content2 });
+          continue;
+        } else if (singleFunctionToCall && singleFunctionToCall !== name) {
+          const content2 = `Invalid tool_call: ${JSON.stringify(name)}. ${JSON.stringify(singleFunctionToCall)} requested. Please try again`;
+          this._addMessage({ role, tool_call_id, content: content2 });
+          continue;
+        }
+        let parsed;
+        try {
+          parsed = isRunnableFunctionWithParse(fn) ? await fn.parse(args) : args;
+        } catch (error9) {
+          const content2 = error9 instanceof Error ? error9.message : String(error9);
+          this._addMessage({ role, tool_call_id, content: content2 });
+          continue;
+        }
+        const rawContent = await fn.function(parsed, this);
+        const content = __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_stringifyFunctionCallResult).call(this, rawContent);
+        this._addMessage({ role, tool_call_id, content });
+        if (singleFunctionToCall) {
+          return;
+        }
+      }
+    }
+    return;
+  }
+}
+_AbstractChatCompletionRunner_instances = new WeakSet, _AbstractChatCompletionRunner_getFinalContent = function _AbstractChatCompletionRunner_getFinalContent2() {
+  return __classPrivateFieldGet5(this, _AbstractChatCompletionRunner_instances, "m", _AbstractChatCompletionRunner_getFinalMessage).call(this).content ?? null;
+}, _AbstractChatCompletionRunner_getFinalMessage = function _AbstractChatCompletionRunner_getFinalMessage2() {
+  let i = this.messages.length;
+  while (i-- > 0) {
+    const message = this.messages[i];
+    if (isAssistantMessage(message)) {
+      const { function_call, ...rest } = message;
+      const ret = {
+        ...rest,
+        content: message.content ?? null,
+        refusal: message.refusal ?? null
+      };
+      if (function_call) {
+        ret.function_call = function_call;
+      }
+      return ret;
+    }
+  }
+  throw new OpenAIError("stream ended without producing a ChatCompletionMessage with role=assistant");
+}, _AbstractChatCompletionRunner_getFinalFunctionCall = function _AbstractChatCompletionRunner_getFinalFunctionCall2() {
+  for (let i = this.messages.length - 1;i >= 0; i--) {
+    const message = this.messages[i];
+    if (isAssistantMessage(message) && message?.function_call) {
+      return message.function_call;
+    }
+    if (isAssistantMessage(message) && message?.tool_calls?.length) {
+      return message.tool_calls.at(-1)?.function;
+    }
+  }
+  return;
+}, _AbstractChatCompletionRunner_getFinalFunctionCallResult = function _AbstractChatCompletionRunner_getFinalFunctionCallResult2() {
+  for (let i = this.messages.length - 1;i >= 0; i--) {
+    const message = this.messages[i];
+    if (isFunctionMessage(message) && message.content != null) {
+      return message.content;
+    }
+    if (isToolMessage(message) && message.content != null && typeof message.content === "string" && this.messages.some((x) => x.role === "assistant" && x.tool_calls?.some((y) => y.type === "function" && y.id === message.tool_call_id))) {
+      return message.content;
+    }
+  }
+  return;
+}, _AbstractChatCompletionRunner_calculateTotalUsage = function _AbstractChatCompletionRunner_calculateTotalUsage2() {
+  const total = {
+    completion_tokens: 0,
+    prompt_tokens: 0,
+    total_tokens: 0
+  };
+  for (const { usage } of this._chatCompletions) {
+    if (usage) {
+      total.completion_tokens += usage.completion_tokens;
+      total.prompt_tokens += usage.prompt_tokens;
+      total.total_tokens += usage.total_tokens;
+    }
+  }
+  return total;
+}, _AbstractChatCompletionRunner_validateParams = function _AbstractChatCompletionRunner_validateParams2(params) {
+  if (params.n != null && params.n > 1) {
+    throw new OpenAIError("ChatCompletion convenience helpers only support n=1 at this time. To use n>1, please use chat.completions.create() directly.");
+  }
+}, _AbstractChatCompletionRunner_stringifyFunctionCallResult = function _AbstractChatCompletionRunner_stringifyFunctionCallResult2(rawContent) {
+  return typeof rawContent === "string" ? rawContent : rawContent === undefined ? "undefined" : JSON.stringify(rawContent);
+};
+
+// node_modules/openai/lib/ChatCompletionRunner.mjs
+class ChatCompletionRunner extends AbstractChatCompletionRunner {
+  static runFunctions(client, params, options) {
+    const runner = new ChatCompletionRunner;
+    const opts = {
+      ...options,
+      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runFunctions" }
+    };
+    runner._run(() => runner._runFunctions(client, params, opts));
+    return runner;
+  }
+  static runTools(client, params, options) {
+    const runner = new ChatCompletionRunner;
+    const opts = {
+      ...options,
+      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runTools" }
+    };
+    runner._run(() => runner._runTools(client, params, opts));
+    return runner;
+  }
+  _addMessage(message, emit = true) {
+    super._addMessage(message, emit);
+    if (isAssistantMessage(message) && message.content) {
+      this._emit("content", message.content);
+    }
+  }
+}
+
+// node_modules/openai/_vendor/partial-json-parser/parser.mjs
+var parseJSON = function(jsonString, allowPartial = Allow.ALL) {
+  if (typeof jsonString !== "string") {
+    throw new TypeError(`expecting str, got ${typeof jsonString}`);
+  }
+  if (!jsonString.trim()) {
+    throw new Error(`${jsonString} is empty`);
+  }
+  return _parseJSON(jsonString.trim(), allowPartial);
+};
+var STR = 1;
+var NUM = 2;
+var ARR = 4;
+var OBJ = 8;
+var NULL = 16;
+var BOOL = 32;
+var NAN = 64;
+var INFINITY = 128;
+var MINUS_INFINITY = 256;
+var INF = INFINITY | MINUS_INFINITY;
+var SPECIAL = NULL | BOOL | INF | NAN;
+var ATOM = STR | NUM | SPECIAL;
+var COLLECTION = ARR | OBJ;
+var ALL = ATOM | COLLECTION;
+var Allow = {
+  STR,
+  NUM,
+  ARR,
+  OBJ,
+  NULL,
+  BOOL,
+  NAN,
+  INFINITY,
+  MINUS_INFINITY,
+  INF,
+  SPECIAL,
+  ATOM,
+  COLLECTION,
+  ALL
+};
+
+class PartialJSON extends Error {
+}
+
+class MalformedJSON extends Error {
+}
+var _parseJSON = (jsonString, allow) => {
+  const length = jsonString.length;
+  let index = 0;
+  const markPartialJSON = (msg) => {
+    throw new PartialJSON(`${msg} at position ${index}`);
+  };
+  const throwMalformedError = (msg) => {
+    throw new MalformedJSON(`${msg} at position ${index}`);
+  };
+  const parseAny = () => {
+    skipBlank();
+    if (index >= length)
+      markPartialJSON("Unexpected end of input");
+    if (jsonString[index] === '"')
+      return parseStr();
+    if (jsonString[index] === "{")
+      return parseObj();
+    if (jsonString[index] === "[")
+      return parseArr();
+    if (jsonString.substring(index, index + 4) === "null" || Allow.NULL & allow && length - index < 4 && "null".startsWith(jsonString.substring(index))) {
+      index += 4;
+      return null;
+    }
+    if (jsonString.substring(index, index + 4) === "true" || Allow.BOOL & allow && length - index < 4 && "true".startsWith(jsonString.substring(index))) {
+      index += 4;
+      return true;
+    }
+    if (jsonString.substring(index, index + 5) === "false" || Allow.BOOL & allow && length - index < 5 && "false".startsWith(jsonString.substring(index))) {
+      index += 5;
+      return false;
+    }
+    if (jsonString.substring(index, index + 8) === "Infinity" || Allow.INFINITY & allow && length - index < 8 && "Infinity".startsWith(jsonString.substring(index))) {
+      index += 8;
+      return Infinity;
+    }
+    if (jsonString.substring(index, index + 9) === "-Infinity" || Allow.MINUS_INFINITY & allow && 1 < length - index && length - index < 9 && "-Infinity".startsWith(jsonString.substring(index))) {
+      index += 9;
+      return (-Infinity);
+    }
+    if (jsonString.substring(index, index + 3) === "NaN" || Allow.NAN & allow && length - index < 3 && "NaN".startsWith(jsonString.substring(index))) {
+      index += 3;
+      return NaN;
+    }
+    return parseNum();
+  };
+  const parseStr = () => {
+    const start = index;
+    let escape2 = false;
+    index++;
+    while (index < length && (jsonString[index] !== '"' || escape2 && jsonString[index - 1] === "\\")) {
+      escape2 = jsonString[index] === "\\" ? !escape2 : false;
+      index++;
+    }
+    if (jsonString.charAt(index) == '"') {
+      try {
+        return JSON.parse(jsonString.substring(start, ++index - Number(escape2)));
+      } catch (e) {
+        throwMalformedError(String(e));
+      }
+    } else if (Allow.STR & allow) {
+      try {
+        return JSON.parse(jsonString.substring(start, index - Number(escape2)) + '"');
+      } catch (e) {
+        return JSON.parse(jsonString.substring(start, jsonString.lastIndexOf("\\")) + '"');
+      }
+    }
+    markPartialJSON("Unterminated string literal");
+  };
+  const parseObj = () => {
+    index++;
+    skipBlank();
+    const obj = {};
+    try {
+      while (jsonString[index] !== "}") {
+        skipBlank();
+        if (index >= length && Allow.OBJ & allow)
+          return obj;
+        const key = parseStr();
+        skipBlank();
+        index++;
+        try {
+          const value = parseAny();
+          Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+        } catch (e) {
+          if (Allow.OBJ & allow)
+            return obj;
+          else
+            throw e;
+        }
+        skipBlank();
+        if (jsonString[index] === ",")
+          index++;
+      }
+    } catch (e) {
+      if (Allow.OBJ & allow)
+        return obj;
+      else
+        markPartialJSON("Expected '}' at end of object");
+    }
+    index++;
+    return obj;
+  };
+  const parseArr = () => {
+    index++;
+    const arr = [];
+    try {
+      while (jsonString[index] !== "]") {
+        arr.push(parseAny());
+        skipBlank();
+        if (jsonString[index] === ",") {
+          index++;
+        }
+      }
+    } catch (e) {
+      if (Allow.ARR & allow) {
+        return arr;
+      }
+      markPartialJSON("Expected ']' at end of array");
+    }
+    index++;
+    return arr;
+  };
+  const parseNum = () => {
+    if (index === 0) {
+      if (jsonString === "-" && Allow.NUM & allow)
+        markPartialJSON("Not sure what '-' is");
+      try {
+        return JSON.parse(jsonString);
+      } catch (e) {
+        if (Allow.NUM & allow) {
+          try {
+            if (jsonString[jsonString.length - 1] === ".")
+              return JSON.parse(jsonString.substring(0, jsonString.lastIndexOf(".")));
+            return JSON.parse(jsonString.substring(0, jsonString.lastIndexOf("e")));
+          } catch (e2) {
+          }
+        }
+        throwMalformedError(String(e));
+      }
+    }
+    const start = index;
+    if (jsonString[index] === "-")
+      index++;
+    while (jsonString[index] && !",]}".includes(jsonString[index]))
+      index++;
+    if (index == length && !(Allow.NUM & allow))
+      markPartialJSON("Unterminated number literal");
+    try {
+      return JSON.parse(jsonString.substring(start, index));
+    } catch (e) {
+      if (jsonString.substring(start, index) === "-" && Allow.NUM & allow)
+        markPartialJSON("Not sure what '-' is");
+      try {
+        return JSON.parse(jsonString.substring(start, jsonString.lastIndexOf("e")));
+      } catch (e2) {
+        throwMalformedError(String(e2));
+      }
+    }
+  };
+  const skipBlank = () => {
+    while (index < length && " \n\r\t".includes(jsonString[index])) {
+      index++;
+    }
+  };
+  return parseAny();
+};
+var partialParse = (input) => parseJSON(input, Allow.ALL ^ Allow.NUM);
+
+// node_modules/openai/lib/ChatCompletionStream.mjs
+var finalizeChatCompletion = function(snapshot, params) {
+  const { id, choices, created, model, system_fingerprint, ...rest } = snapshot;
+  const completion = {
+    ...rest,
+    id,
+    choices: choices.map(({ message, finish_reason, index, logprobs, ...choiceRest }) => {
+      if (!finish_reason) {
+        throw new OpenAIError(`missing finish_reason for choice ${index}`);
+      }
+      const { content = null, function_call, tool_calls, ...messageRest } = message;
+      const role = message.role;
+      if (!role) {
+        throw new OpenAIError(`missing role for choice ${index}`);
+      }
+      if (function_call) {
+        const { arguments: args, name } = function_call;
+        if (args == null) {
+          throw new OpenAIError(`missing function_call.arguments for choice ${index}`);
+        }
+        if (!name) {
+          throw new OpenAIError(`missing function_call.name for choice ${index}`);
+        }
+        return {
+          ...choiceRest,
+          message: {
+            content,
+            function_call: { arguments: args, name },
+            role,
+            refusal: message.refusal ?? null
+          },
+          finish_reason,
+          index,
+          logprobs
+        };
+      }
+      if (tool_calls) {
+        return {
+          ...choiceRest,
+          index,
+          finish_reason,
+          logprobs,
+          message: {
+            ...messageRest,
+            role,
+            content,
+            refusal: message.refusal ?? null,
+            tool_calls: tool_calls.map((tool_call, i) => {
+              const { function: fn, type, id: id2, ...toolRest } = tool_call;
+              const { arguments: args, name, ...fnRest } = fn || {};
+              if (id2 == null) {
+                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].id\n${str(snapshot)}`);
+              }
+              if (type == null) {
+                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].type\n${str(snapshot)}`);
+              }
+              if (name == null) {
+                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].function.name\n${str(snapshot)}`);
+              }
+              if (args == null) {
+                throw new OpenAIError(`missing choices[${index}].tool_calls[${i}].function.arguments\n${str(snapshot)}`);
+              }
+              return { ...toolRest, id: id2, type, function: { ...fnRest, name, arguments: args } };
+            })
+          }
+        };
+      }
+      return {
+        ...choiceRest,
+        message: { ...messageRest, content, role, refusal: message.refusal ?? null },
+        finish_reason,
+        index,
+        logprobs
+      };
+    }),
+    created,
+    model,
+    object: "chat.completion",
+    ...system_fingerprint ? { system_fingerprint } : {}
+  };
+  return maybeParseChatCompletion(completion, params);
+};
+var str = function(x) {
+  return JSON.stringify(x);
+};
+var assertIsEmpty = function(obj) {
+  return;
+};
+var assertNever2 = function(_x) {
+};
+var __classPrivateFieldSet5 = function(receiver, state, value, kind2, f) {
+  if (kind2 === "m")
+    throw new TypeError("Private method is not writable");
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a setter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot write private member to an object whose class did not declare it");
+  return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
+};
+var __classPrivateFieldGet6 = function(receiver, state, kind2, f) {
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a getter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot read private member from an object whose class did not declare it");
+  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _ChatCompletionStream_instances;
+var _ChatCompletionStream_params;
+var _ChatCompletionStream_choiceEventStates;
+var _ChatCompletionStream_currentChatCompletionSnapshot;
+var _ChatCompletionStream_beginRequest;
+var _ChatCompletionStream_getChoiceEventState;
+var _ChatCompletionStream_addChunk;
+var _ChatCompletionStream_emitToolCallDoneEvent;
+var _ChatCompletionStream_emitContentDoneEvents;
+var _ChatCompletionStream_endRequest;
+var _ChatCompletionStream_getAutoParseableResponseFormat;
+var _ChatCompletionStream_accumulateChatCompletion;
+
+class ChatCompletionStream extends AbstractChatCompletionRunner {
+  constructor(params) {
+    super();
+    _ChatCompletionStream_instances.add(this);
+    _ChatCompletionStream_params.set(this, undefined);
+    _ChatCompletionStream_choiceEventStates.set(this, undefined);
+    _ChatCompletionStream_currentChatCompletionSnapshot.set(this, undefined);
+    __classPrivateFieldSet5(this, _ChatCompletionStream_params, params, "f");
+    __classPrivateFieldSet5(this, _ChatCompletionStream_choiceEventStates, [], "f");
+  }
+  get currentChatCompletionSnapshot() {
+    return __classPrivateFieldGet6(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
+  }
+  static fromReadableStream(stream) {
+    const runner = new ChatCompletionStream(null);
+    runner._run(() => runner._fromReadableStream(stream));
+    return runner;
+  }
+  static createChatCompletion(client, params, options) {
+    const runner = new ChatCompletionStream(params);
+    runner._run(() => runner._runChatCompletion(client, { ...params, stream: true }, { ...options, headers: { ...options?.headers, "X-Stainless-Helper-Method": "stream" } }));
+    return runner;
+  }
+  async _createChatCompletion(client, params, options) {
+    super._createChatCompletion;
+    const signal = options?.signal;
+    if (signal) {
+      if (signal.aborted)
+        this.controller.abort();
+      signal.addEventListener("abort", () => this.controller.abort());
+    }
+    __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_beginRequest).call(this);
+    const stream = await client.chat.completions.create({ ...params, stream: true }, { ...options, signal: this.controller.signal });
+    this._connected();
+    for await (const chunk of stream) {
+      __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_addChunk).call(this, chunk);
+    }
+    if (stream.controller.signal?.aborted) {
+      throw new APIUserAbortError;
+    }
+    return this._addChatCompletion(__classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
+  }
+  async _fromReadableStream(readableStream, options) {
+    const signal = options?.signal;
+    if (signal) {
+      if (signal.aborted)
+        this.controller.abort();
+      signal.addEventListener("abort", () => this.controller.abort());
+    }
+    __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_beginRequest).call(this);
+    this._connected();
+    const stream = Stream.fromReadableStream(readableStream, this.controller);
+    let chatId;
+    for await (const chunk of stream) {
+      if (chatId && chatId !== chunk.id) {
+        this._addChatCompletion(__classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
+      }
+      __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_addChunk).call(this, chunk);
+      chatId = chunk.id;
+    }
+    if (stream.controller.signal?.aborted) {
+      throw new APIUserAbortError;
+    }
+    return this._addChatCompletion(__classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_endRequest).call(this));
+  }
+  [(_ChatCompletionStream_params = new WeakMap, _ChatCompletionStream_choiceEventStates = new WeakMap, _ChatCompletionStream_currentChatCompletionSnapshot = new WeakMap, _ChatCompletionStream_instances = new WeakSet, _ChatCompletionStream_beginRequest = function _ChatCompletionStream_beginRequest() {
+    if (this.ended)
+      return;
+    __classPrivateFieldSet5(this, _ChatCompletionStream_currentChatCompletionSnapshot, undefined, "f");
+  }, _ChatCompletionStream_getChoiceEventState = function _ChatCompletionStream_getChoiceEventState(choice) {
+    let state = __classPrivateFieldGet6(this, _ChatCompletionStream_choiceEventStates, "f")[choice.index];
+    if (state) {
+      return state;
+    }
+    state = {
+      content_done: false,
+      refusal_done: false,
+      logprobs_content_done: false,
+      logprobs_refusal_done: false,
+      done_tool_calls: new Set,
+      current_tool_call_index: null
+    };
+    __classPrivateFieldGet6(this, _ChatCompletionStream_choiceEventStates, "f")[choice.index] = state;
+    return state;
+  }, _ChatCompletionStream_addChunk = function _ChatCompletionStream_addChunk(chunk) {
+    if (this.ended)
+      return;
+    const completion = __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_accumulateChatCompletion).call(this, chunk);
+    this._emit("chunk", chunk, completion);
+    for (const choice of chunk.choices) {
+      const choiceSnapshot = completion.choices[choice.index];
+      if (choice.delta.content != null && choiceSnapshot.message?.role === "assistant" && choiceSnapshot.message?.content) {
+        this._emit("content", choice.delta.content, choiceSnapshot.message.content);
+        this._emit("content.delta", {
+          delta: choice.delta.content,
+          snapshot: choiceSnapshot.message.content,
+          parsed: choiceSnapshot.message.parsed
+        });
+      }
+      if (choice.delta.refusal != null && choiceSnapshot.message?.role === "assistant" && choiceSnapshot.message?.refusal) {
+        this._emit("refusal.delta", {
+          delta: choice.delta.refusal,
+          snapshot: choiceSnapshot.message.refusal
+        });
+      }
+      if (choice.logprobs?.content != null && choiceSnapshot.message?.role === "assistant") {
+        this._emit("logprobs.content.delta", {
+          content: choice.logprobs?.content,
+          snapshot: choiceSnapshot.logprobs?.content ?? []
+        });
+      }
+      if (choice.logprobs?.refusal != null && choiceSnapshot.message?.role === "assistant") {
+        this._emit("logprobs.refusal.delta", {
+          refusal: choice.logprobs?.refusal,
+          snapshot: choiceSnapshot.logprobs?.refusal ?? []
+        });
+      }
+      const state = __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
+      if (choiceSnapshot.finish_reason) {
+        __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitContentDoneEvents).call(this, choiceSnapshot);
+        if (state.current_tool_call_index != null) {
+          __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitToolCallDoneEvent).call(this, choiceSnapshot, state.current_tool_call_index);
+        }
+      }
+      for (const toolCall of choice.delta.tool_calls ?? []) {
+        if (state.current_tool_call_index !== toolCall.index) {
+          __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitContentDoneEvents).call(this, choiceSnapshot);
+          if (state.current_tool_call_index != null) {
+            __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_emitToolCallDoneEvent).call(this, choiceSnapshot, state.current_tool_call_index);
+          }
+        }
+        state.current_tool_call_index = toolCall.index;
+      }
+      for (const toolCallDelta of choice.delta.tool_calls ?? []) {
+        const toolCallSnapshot = choiceSnapshot.message.tool_calls?.[toolCallDelta.index];
+        if (!toolCallSnapshot?.type) {
+          continue;
+        }
+        if (toolCallSnapshot?.type === "function") {
+          this._emit("tool_calls.function.arguments.delta", {
+            name: toolCallSnapshot.function?.name,
+            index: toolCallDelta.index,
+            arguments: toolCallSnapshot.function.arguments,
+            parsed_arguments: toolCallSnapshot.function.parsed_arguments,
+            arguments_delta: toolCallDelta.function?.arguments ?? ""
+          });
+        } else {
+          assertNever2(toolCallSnapshot?.type);
+        }
+      }
+    }
+  }, _ChatCompletionStream_emitToolCallDoneEvent = function _ChatCompletionStream_emitToolCallDoneEvent(choiceSnapshot, toolCallIndex) {
+    const state = __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
+    if (state.done_tool_calls.has(toolCallIndex)) {
+      return;
+    }
+    const toolCallSnapshot = choiceSnapshot.message.tool_calls?.[toolCallIndex];
+    if (!toolCallSnapshot) {
+      throw new Error("no tool call snapshot");
+    }
+    if (!toolCallSnapshot.type) {
+      throw new Error("tool call snapshot missing `type`");
+    }
+    if (toolCallSnapshot.type === "function") {
+      const inputTool = __classPrivateFieldGet6(this, _ChatCompletionStream_params, "f")?.tools?.find((tool) => tool.type === "function" && tool.function.name === toolCallSnapshot.function.name);
+      this._emit("tool_calls.function.arguments.done", {
+        name: toolCallSnapshot.function.name,
+        index: toolCallIndex,
+        arguments: toolCallSnapshot.function.arguments,
+        parsed_arguments: isAutoParsableTool(inputTool) ? inputTool.$parseRaw(toolCallSnapshot.function.arguments) : inputTool?.function.strict ? JSON.parse(toolCallSnapshot.function.arguments) : null
+      });
+    } else {
+      assertNever2(toolCallSnapshot.type);
+    }
+  }, _ChatCompletionStream_emitContentDoneEvents = function _ChatCompletionStream_emitContentDoneEvents(choiceSnapshot) {
+    const state = __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getChoiceEventState).call(this, choiceSnapshot);
+    if (choiceSnapshot.message.content && !state.content_done) {
+      state.content_done = true;
+      const responseFormat = __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this);
+      this._emit("content.done", {
+        content: choiceSnapshot.message.content,
+        parsed: responseFormat ? responseFormat.$parseRaw(choiceSnapshot.message.content) : null
+      });
+    }
+    if (choiceSnapshot.message.refusal && !state.refusal_done) {
+      state.refusal_done = true;
+      this._emit("refusal.done", { refusal: choiceSnapshot.message.refusal });
+    }
+    if (choiceSnapshot.logprobs?.content && !state.logprobs_content_done) {
+      state.logprobs_content_done = true;
+      this._emit("logprobs.content.done", { content: choiceSnapshot.logprobs.content });
+    }
+    if (choiceSnapshot.logprobs?.refusal && !state.logprobs_refusal_done) {
+      state.logprobs_refusal_done = true;
+      this._emit("logprobs.refusal.done", { refusal: choiceSnapshot.logprobs.refusal });
+    }
+  }, _ChatCompletionStream_endRequest = function _ChatCompletionStream_endRequest() {
+    if (this.ended) {
+      throw new OpenAIError(`stream has ended, this shouldn't happen`);
+    }
+    const snapshot = __classPrivateFieldGet6(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
+    if (!snapshot) {
+      throw new OpenAIError(`request ended without sending any chunks`);
+    }
+    __classPrivateFieldSet5(this, _ChatCompletionStream_currentChatCompletionSnapshot, undefined, "f");
+    __classPrivateFieldSet5(this, _ChatCompletionStream_choiceEventStates, [], "f");
+    return finalizeChatCompletion(snapshot, __classPrivateFieldGet6(this, _ChatCompletionStream_params, "f"));
+  }, _ChatCompletionStream_getAutoParseableResponseFormat = function _ChatCompletionStream_getAutoParseableResponseFormat() {
+    const responseFormat = __classPrivateFieldGet6(this, _ChatCompletionStream_params, "f")?.response_format;
+    if (isAutoParsableResponseFormat(responseFormat)) {
+      return responseFormat;
+    }
+    return null;
+  }, _ChatCompletionStream_accumulateChatCompletion = function _ChatCompletionStream_accumulateChatCompletion(chunk) {
+    var _a, _b, _c, _d;
+    let snapshot = __classPrivateFieldGet6(this, _ChatCompletionStream_currentChatCompletionSnapshot, "f");
+    const { choices, ...rest } = chunk;
+    if (!snapshot) {
+      snapshot = __classPrivateFieldSet5(this, _ChatCompletionStream_currentChatCompletionSnapshot, {
+        ...rest,
+        choices: []
+      }, "f");
+    } else {
+      Object.assign(snapshot, rest);
+    }
+    for (const { delta, finish_reason, index, logprobs = null, ...other } of chunk.choices) {
+      let choice = snapshot.choices[index];
+      if (!choice) {
+        choice = snapshot.choices[index] = { finish_reason, index, message: {}, logprobs, ...other };
+      }
+      if (logprobs) {
+        if (!choice.logprobs) {
+          choice.logprobs = Object.assign({}, logprobs);
+        } else {
+          const { content: content2, refusal: refusal2, ...rest3 } = logprobs;
+          assertIsEmpty(rest3);
+          Object.assign(choice.logprobs, rest3);
+          if (content2) {
+            (_a = choice.logprobs).content ?? (_a.content = []);
+            choice.logprobs.content.push(...content2);
+          }
+          if (refusal2) {
+            (_b = choice.logprobs).refusal ?? (_b.refusal = []);
+            choice.logprobs.refusal.push(...refusal2);
+          }
+        }
+      }
+      if (finish_reason) {
+        choice.finish_reason = finish_reason;
+        if (__classPrivateFieldGet6(this, _ChatCompletionStream_params, "f") && hasAutoParseableInput(__classPrivateFieldGet6(this, _ChatCompletionStream_params, "f"))) {
+          if (finish_reason === "length") {
+            throw new LengthFinishReasonError;
+          }
+          if (finish_reason === "content_filter") {
+            throw new ContentFilterFinishReasonError;
+          }
+        }
+      }
+      Object.assign(choice, other);
+      if (!delta)
+        continue;
+      const { content, refusal, function_call, role, tool_calls, ...rest2 } = delta;
+      assertIsEmpty(rest2);
+      Object.assign(choice.message, rest2);
+      if (refusal) {
+        choice.message.refusal = (choice.message.refusal || "") + refusal;
+      }
+      if (role)
+        choice.message.role = role;
+      if (function_call) {
+        if (!choice.message.function_call) {
+          choice.message.function_call = function_call;
+        } else {
+          if (function_call.name)
+            choice.message.function_call.name = function_call.name;
+          if (function_call.arguments) {
+            (_c = choice.message.function_call).arguments ?? (_c.arguments = "");
+            choice.message.function_call.arguments += function_call.arguments;
+          }
+        }
+      }
+      if (content) {
+        choice.message.content = (choice.message.content || "") + content;
+        if (!choice.message.refusal && __classPrivateFieldGet6(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this)) {
+          choice.message.parsed = partialParse(choice.message.content);
+        }
+      }
+      if (tool_calls) {
+        if (!choice.message.tool_calls)
+          choice.message.tool_calls = [];
+        for (const { index: index2, id, type, function: fn, ...rest3 } of tool_calls) {
+          const tool_call = (_d = choice.message.tool_calls)[index2] ?? (_d[index2] = {});
+          Object.assign(tool_call, rest3);
+          if (id)
+            tool_call.id = id;
+          if (type)
+            tool_call.type = type;
+          if (fn)
+            tool_call.function ?? (tool_call.function = { name: fn.name ?? "", arguments: "" });
+          if (fn?.name)
+            tool_call.function.name = fn.name;
+          if (fn?.arguments) {
+            tool_call.function.arguments += fn.arguments;
+            if (shouldParseToolCall(__classPrivateFieldGet6(this, _ChatCompletionStream_params, "f"), tool_call)) {
+              tool_call.function.parsed_arguments = partialParse(tool_call.function.arguments);
+            }
+          }
+        }
+      }
+    }
+    return snapshot;
+  }, Symbol.asyncIterator)]() {
+    const pushQueue = [];
+    const readQueue = [];
+    let done = false;
+    this.on("chunk", (chunk) => {
+      const reader = readQueue.shift();
+      if (reader) {
+        reader.resolve(chunk);
+      } else {
+        pushQueue.push(chunk);
+      }
+    });
+    this.on("end", () => {
+      done = true;
+      for (const reader of readQueue) {
+        reader.resolve(undefined);
+      }
+      readQueue.length = 0;
+    });
+    this.on("abort", (err) => {
+      done = true;
+      for (const reader of readQueue) {
+        reader.reject(err);
+      }
+      readQueue.length = 0;
+    });
+    this.on("error", (err) => {
+      done = true;
+      for (const reader of readQueue) {
+        reader.reject(err);
+      }
+      readQueue.length = 0;
+    });
+    return {
+      next: async () => {
+        if (!pushQueue.length) {
+          if (done) {
+            return { value: undefined, done: true };
+          }
+          return new Promise((resolve, reject) => readQueue.push({ resolve, reject })).then((chunk2) => chunk2 ? { value: chunk2, done: false } : { value: undefined, done: true });
+        }
+        const chunk = pushQueue.shift();
+        return { value: chunk, done: false };
+      },
+      return: async () => {
+        this.abort();
+        return { value: undefined, done: true };
+      }
+    };
+  }
+  toReadableStream() {
+    const stream = new Stream(this[Symbol.asyncIterator].bind(this), this.controller);
+    return stream.toReadableStream();
+  }
+}
+
+// node_modules/openai/lib/ChatCompletionStreamingRunner.mjs
+class ChatCompletionStreamingRunner extends ChatCompletionStream {
+  static fromReadableStream(stream) {
+    const runner = new ChatCompletionStreamingRunner(null);
+    runner._run(() => runner._fromReadableStream(stream));
+    return runner;
+  }
+  static runFunctions(client, params, options) {
+    const runner = new ChatCompletionStreamingRunner(null);
+    const opts = {
+      ...options,
+      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runFunctions" }
+    };
+    runner._run(() => runner._runFunctions(client, params, opts));
+    return runner;
+  }
+  static runTools(client, params, options) {
+    const runner = new ChatCompletionStreamingRunner(params);
+    const opts = {
+      ...options,
+      headers: { ...options?.headers, "X-Stainless-Helper-Method": "runTools" }
+    };
+    runner._run(() => runner._runTools(client, params, opts));
+    return runner;
+  }
+}
+
+// node_modules/openai/resources/beta/chat/completions.mjs
+class Completions2 extends APIResource {
+  parse(body, options) {
+    validateInputTools(body.tools);
+    return this._client.chat.completions.create(body, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        "X-Stainless-Helper-Method": "beta.chat.completions.parse"
+      }
+    })._thenUnwrap((completion) => parseChatCompletion(completion, body));
+  }
+  runFunctions(body, options) {
+    if (body.stream) {
+      return ChatCompletionStreamingRunner.runFunctions(this._client, body, options);
+    }
+    return ChatCompletionRunner.runFunctions(this._client, body, options);
+  }
+  runTools(body, options) {
+    if (body.stream) {
+      return ChatCompletionStreamingRunner.runTools(this._client, body, options);
+    }
+    return ChatCompletionRunner.runTools(this._client, body, options);
+  }
+  stream(body, options) {
+    return ChatCompletionStream.createChatCompletion(this._client, body, options);
+  }
+}
+
+// node_modules/openai/resources/beta/chat/chat.mjs
+class Chat2 extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.completions = new Completions2(this._client);
+  }
+}
+(function(Chat3) {
+  Chat3.Completions = Completions2;
+})(Chat2 || (Chat2 = {}));
+
+// node_modules/openai/resources/beta/realtime/sessions.mjs
+class Sessions extends APIResource {
+  create(body, options) {
+    return this._client.post("/realtime/sessions", {
+      body,
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+}
+
+// node_modules/openai/resources/beta/realtime/transcription-sessions.mjs
+class TranscriptionSessions extends APIResource {
+  create(body, options) {
+    return this._client.post("/realtime/transcription_sessions", {
+      body,
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+}
+
+// node_modules/openai/resources/beta/realtime/realtime.mjs
+class Realtime extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.sessions = new Sessions(this._client);
+    this.transcriptionSessions = new TranscriptionSessions(this._client);
+  }
+}
+Realtime.Sessions = Sessions;
+Realtime.TranscriptionSessions = TranscriptionSessions;
+
 // node_modules/openai/resources/beta/threads/messages.mjs
-class Messages extends APIResource {
+class Messages2 extends APIResource {
   create(threadId, body, options) {
     return this._client.post(`/threads/${threadId}/messages`, {
       body,
@@ -3487,14 +3997,16 @@ class Messages extends APIResource {
 
 class MessagesPage extends CursorPage {
 }
-(function(Messages2) {
-  Messages2.MessagesPage = MessagesPage;
-})(Messages || (Messages = {}));
+Messages2.MessagesPage = MessagesPage;
 
 // node_modules/openai/resources/beta/threads/runs/steps.mjs
 class Steps extends APIResource {
-  retrieve(threadId, runId, stepId, options) {
+  retrieve(threadId, runId, stepId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.retrieve(threadId, runId, stepId, {}, query);
+    }
     return this._client.get(`/threads/${threadId}/runs/${runId}/steps/${stepId}`, {
+      query,
       ...options,
       headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
     });
@@ -3513,9 +4025,7 @@ class Steps extends APIResource {
 
 class RunStepsPage extends CursorPage {
 }
-(function(Steps2) {
-  Steps2.RunStepsPage = RunStepsPage;
-})(Steps || (Steps = {}));
+Steps.RunStepsPage = RunStepsPage;
 
 // node_modules/openai/resources/beta/threads/runs/runs.mjs
 class Runs extends APIResource {
@@ -3523,12 +4033,14 @@ class Runs extends APIResource {
     super(...arguments);
     this.steps = new Steps(this._client);
   }
-  create(threadId, body, options) {
+  create(threadId, params, options) {
+    const { include, ...body } = params;
     return this._client.post(`/threads/${threadId}/runs`, {
+      query: { include },
       body,
       ...options,
       headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers },
-      stream: body.stream ?? false
+      stream: params.stream ?? false
     });
   }
   retrieve(threadId, runId, options) {
@@ -3627,18 +4139,16 @@ class Runs extends APIResource {
 
 class RunsPage extends CursorPage {
 }
-(function(Runs2) {
-  Runs2.RunsPage = RunsPage;
-  Runs2.Steps = Steps;
-  Runs2.RunStepsPage = RunStepsPage;
-})(Runs || (Runs = {}));
+Runs.RunsPage = RunsPage;
+Runs.Steps = Steps;
+Runs.RunStepsPage = RunStepsPage;
 
 // node_modules/openai/resources/beta/threads/threads.mjs
 class Threads extends APIResource {
   constructor() {
     super(...arguments);
     this.runs = new Runs(this._client);
-    this.messages = new Messages(this._client);
+    this.messages = new Messages2(this._client);
   }
   create(body = {}, options) {
     if (isRequestOptions(body)) {
@@ -3685,13 +4195,757 @@ class Threads extends APIResource {
     return AssistantStream.createThreadAssistantStream(body, this._client.beta.threads, options);
   }
 }
-(function(Threads2) {
-  Threads2.Runs = Runs;
-  Threads2.RunsPage = RunsPage;
-  Threads2.Messages = Messages;
-  Threads2.MessagesPage = MessagesPage;
-})(Threads || (Threads = {}));
+Threads.Runs = Runs;
+Threads.RunsPage = RunsPage;
+Threads.Messages = Messages2;
+Threads.MessagesPage = MessagesPage;
 
+// node_modules/openai/resources/beta/beta.mjs
+class Beta extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.realtime = new Realtime(this._client);
+    this.chat = new Chat2(this._client);
+    this.assistants = new Assistants(this._client);
+    this.threads = new Threads(this._client);
+  }
+}
+Beta.Realtime = Realtime;
+Beta.Assistants = Assistants;
+Beta.AssistantsPage = AssistantsPage;
+Beta.Threads = Threads;
+// node_modules/openai/resources/completions.mjs
+class Completions3 extends APIResource {
+  create(body, options) {
+    return this._client.post("/completions", { body, ...options, stream: body.stream ?? false });
+  }
+}
+// node_modules/openai/resources/embeddings.mjs
+class Embeddings extends APIResource {
+  create(body, options) {
+    const hasUserProvidedEncodingFormat = !!body.encoding_format;
+    let encoding_format = hasUserProvidedEncodingFormat ? body.encoding_format : "base64";
+    if (hasUserProvidedEncodingFormat) {
+      debug("Request", "User defined encoding_format:", body.encoding_format);
+    }
+    const response = this._client.post("/embeddings", {
+      body: {
+        ...body,
+        encoding_format
+      },
+      ...options
+    });
+    if (hasUserProvidedEncodingFormat) {
+      return response;
+    }
+    debug("response", "Decoding base64 embeddings to float32 array");
+    return response._thenUnwrap((response2) => {
+      if (response2 && response2.data) {
+        response2.data.forEach((embeddingBase64Obj) => {
+          const embeddingBase64Str = embeddingBase64Obj.embedding;
+          embeddingBase64Obj.embedding = toFloat32Array(embeddingBase64Str);
+        });
+      }
+      return response2;
+    });
+  }
+}
+// node_modules/openai/resources/evals/runs/output-items.mjs
+class OutputItems extends APIResource {
+  retrieve(evalId, runId, outputItemId, options) {
+    return this._client.get(`/evals/${evalId}/runs/${runId}/output_items/${outputItemId}`, options);
+  }
+  list(evalId, runId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list(evalId, runId, {}, query);
+    }
+    return this._client.getAPIList(`/evals/${evalId}/runs/${runId}/output_items`, OutputItemListResponsesPage, { query, ...options });
+  }
+}
+
+class OutputItemListResponsesPage extends CursorPage {
+}
+OutputItems.OutputItemListResponsesPage = OutputItemListResponsesPage;
+
+// node_modules/openai/resources/evals/runs/runs.mjs
+class Runs2 extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.outputItems = new OutputItems(this._client);
+  }
+  create(evalId, body, options) {
+    return this._client.post(`/evals/${evalId}/runs`, { body, ...options });
+  }
+  retrieve(evalId, runId, options) {
+    return this._client.get(`/evals/${evalId}/runs/${runId}`, options);
+  }
+  list(evalId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list(evalId, {}, query);
+    }
+    return this._client.getAPIList(`/evals/${evalId}/runs`, RunListResponsesPage, { query, ...options });
+  }
+  del(evalId, runId, options) {
+    return this._client.delete(`/evals/${evalId}/runs/${runId}`, options);
+  }
+  cancel(evalId, runId, options) {
+    return this._client.post(`/evals/${evalId}/runs/${runId}`, options);
+  }
+}
+
+class RunListResponsesPage extends CursorPage {
+}
+Runs2.RunListResponsesPage = RunListResponsesPage;
+Runs2.OutputItems = OutputItems;
+Runs2.OutputItemListResponsesPage = OutputItemListResponsesPage;
+
+// node_modules/openai/resources/evals/evals.mjs
+class Evals extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.runs = new Runs2(this._client);
+  }
+  create(body, options) {
+    return this._client.post("/evals", { body, ...options });
+  }
+  retrieve(evalId, options) {
+    return this._client.get(`/evals/${evalId}`, options);
+  }
+  update(evalId, body, options) {
+    return this._client.post(`/evals/${evalId}`, { body, ...options });
+  }
+  list(query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list({}, query);
+    }
+    return this._client.getAPIList("/evals", EvalListResponsesPage, { query, ...options });
+  }
+  del(evalId, options) {
+    return this._client.delete(`/evals/${evalId}`, options);
+  }
+}
+
+class EvalListResponsesPage extends CursorPage {
+}
+Evals.EvalListResponsesPage = EvalListResponsesPage;
+Evals.Runs = Runs2;
+Evals.RunListResponsesPage = RunListResponsesPage;
+// node_modules/openai/resources/files.mjs
+class Files extends APIResource {
+  create(body, options) {
+    return this._client.post("/files", multipartFormRequestOptions({ body, ...options }));
+  }
+  retrieve(fileId, options) {
+    return this._client.get(`/files/${fileId}`, options);
+  }
+  list(query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list({}, query);
+    }
+    return this._client.getAPIList("/files", FileObjectsPage, { query, ...options });
+  }
+  del(fileId, options) {
+    return this._client.delete(`/files/${fileId}`, options);
+  }
+  content(fileId, options) {
+    return this._client.get(`/files/${fileId}/content`, {
+      ...options,
+      headers: { Accept: "application/binary", ...options?.headers },
+      __binaryResponse: true
+    });
+  }
+  retrieveContent(fileId, options) {
+    return this._client.get(`/files/${fileId}/content`, options);
+  }
+  async waitForProcessing(id, { pollInterval = 5000, maxWait = 30 * 60 * 1000 } = {}) {
+    const TERMINAL_STATES = new Set(["processed", "error", "deleted"]);
+    const start = Date.now();
+    let file = await this.retrieve(id);
+    while (!file.status || !TERMINAL_STATES.has(file.status)) {
+      await sleep(pollInterval);
+      file = await this.retrieve(id);
+      if (Date.now() - start > maxWait) {
+        throw new APIConnectionTimeoutError({
+          message: `Giving up on waiting for file ${id} to finish processing after ${maxWait} milliseconds.`
+        });
+      }
+    }
+    return file;
+  }
+}
+
+class FileObjectsPage extends CursorPage {
+}
+Files.FileObjectsPage = FileObjectsPage;
+// node_modules/openai/resources/fine-tuning/checkpoints/permissions.mjs
+class Permissions extends APIResource {
+  create(fineTunedModelCheckpoint, body, options) {
+    return this._client.getAPIList(`/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, PermissionCreateResponsesPage, { body, method: "post", ...options });
+  }
+  retrieve(fineTunedModelCheckpoint, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.retrieve(fineTunedModelCheckpoint, {}, query);
+    }
+    return this._client.get(`/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions`, {
+      query,
+      ...options
+    });
+  }
+  del(fineTunedModelCheckpoint, permissionId, options) {
+    return this._client.delete(`/fine_tuning/checkpoints/${fineTunedModelCheckpoint}/permissions/${permissionId}`, options);
+  }
+}
+
+class PermissionCreateResponsesPage extends Page {
+}
+Permissions.PermissionCreateResponsesPage = PermissionCreateResponsesPage;
+
+// node_modules/openai/resources/fine-tuning/checkpoints/checkpoints.mjs
+class Checkpoints extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.permissions = new Permissions(this._client);
+  }
+}
+Checkpoints.Permissions = Permissions;
+Checkpoints.PermissionCreateResponsesPage = PermissionCreateResponsesPage;
+
+// node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
+class Checkpoints2 extends APIResource {
+  list(fineTuningJobId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list(fineTuningJobId, {}, query);
+    }
+    return this._client.getAPIList(`/fine_tuning/jobs/${fineTuningJobId}/checkpoints`, FineTuningJobCheckpointsPage, { query, ...options });
+  }
+}
+
+class FineTuningJobCheckpointsPage extends CursorPage {
+}
+Checkpoints2.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
+
+// node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
+class Jobs extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.checkpoints = new Checkpoints2(this._client);
+  }
+  create(body, options) {
+    return this._client.post("/fine_tuning/jobs", { body, ...options });
+  }
+  retrieve(fineTuningJobId, options) {
+    return this._client.get(`/fine_tuning/jobs/${fineTuningJobId}`, options);
+  }
+  list(query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list({}, query);
+    }
+    return this._client.getAPIList("/fine_tuning/jobs", FineTuningJobsPage, { query, ...options });
+  }
+  cancel(fineTuningJobId, options) {
+    return this._client.post(`/fine_tuning/jobs/${fineTuningJobId}/cancel`, options);
+  }
+  listEvents(fineTuningJobId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.listEvents(fineTuningJobId, {}, query);
+    }
+    return this._client.getAPIList(`/fine_tuning/jobs/${fineTuningJobId}/events`, FineTuningJobEventsPage, {
+      query,
+      ...options
+    });
+  }
+}
+
+class FineTuningJobsPage extends CursorPage {
+}
+
+class FineTuningJobEventsPage extends CursorPage {
+}
+Jobs.FineTuningJobsPage = FineTuningJobsPage;
+Jobs.FineTuningJobEventsPage = FineTuningJobEventsPage;
+Jobs.Checkpoints = Checkpoints2;
+Jobs.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
+
+// node_modules/openai/resources/fine-tuning/fine-tuning.mjs
+class FineTuning extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.jobs = new Jobs(this._client);
+    this.checkpoints = new Checkpoints(this._client);
+  }
+}
+FineTuning.Jobs = Jobs;
+FineTuning.FineTuningJobsPage = FineTuningJobsPage;
+FineTuning.FineTuningJobEventsPage = FineTuningJobEventsPage;
+FineTuning.Checkpoints = Checkpoints;
+// node_modules/openai/resources/images.mjs
+class Images extends APIResource {
+  createVariation(body, options) {
+    return this._client.post("/images/variations", multipartFormRequestOptions({ body, ...options }));
+  }
+  edit(body, options) {
+    return this._client.post("/images/edits", multipartFormRequestOptions({ body, ...options }));
+  }
+  generate(body, options) {
+    return this._client.post("/images/generations", { body, ...options });
+  }
+}
+// node_modules/openai/resources/models.mjs
+class Models extends APIResource {
+  retrieve(model, options) {
+    return this._client.get(`/models/${model}`, options);
+  }
+  list(options) {
+    return this._client.getAPIList("/models", ModelsPage, options);
+  }
+  del(model, options) {
+    return this._client.delete(`/models/${model}`, options);
+  }
+}
+
+class ModelsPage extends Page {
+}
+Models.ModelsPage = ModelsPage;
+// node_modules/openai/resources/moderations.mjs
+class Moderations extends APIResource {
+  create(body, options) {
+    return this._client.post("/moderations", { body, ...options });
+  }
+}
+// node_modules/openai/lib/ResponsesParser.mjs
+function maybeParseResponse(response, params) {
+  if (!params || !hasAutoParseableInput2(params)) {
+    return {
+      ...response,
+      output_parsed: null,
+      output: response.output.map((item) => {
+        if (item.type === "function_call") {
+          return {
+            ...item,
+            parsed_arguments: null
+          };
+        }
+        if (item.type === "message") {
+          return {
+            ...item,
+            content: item.content.map((content) => ({
+              ...content,
+              parsed: null
+            }))
+          };
+        } else {
+          return item;
+        }
+      })
+    };
+  }
+  return parseResponse(response, params);
+}
+function parseResponse(response, params) {
+  const output = response.output.map((item) => {
+    if (item.type === "function_call") {
+      return {
+        ...item,
+        parsed_arguments: parseToolCall2(params, item)
+      };
+    }
+    if (item.type === "message") {
+      const content = item.content.map((content2) => {
+        if (content2.type === "output_text") {
+          return {
+            ...content2,
+            parsed: parseTextFormat(params, content2.text)
+          };
+        }
+        return content2;
+      });
+      return {
+        ...item,
+        content
+      };
+    }
+    return item;
+  });
+  const parsed = Object.assign({}, response, { output });
+  if (!Object.getOwnPropertyDescriptor(response, "output_text")) {
+    addOutputText(parsed);
+  }
+  Object.defineProperty(parsed, "output_parsed", {
+    enumerable: true,
+    get() {
+      for (const output2 of parsed.output) {
+        if (output2.type !== "message") {
+          continue;
+        }
+        for (const content of output2.content) {
+          if (content.type === "output_text" && content.parsed !== null) {
+            return content.parsed;
+          }
+        }
+      }
+      return null;
+    }
+  });
+  return parsed;
+}
+var parseTextFormat = function(params, content) {
+  if (params.text?.format?.type !== "json_schema") {
+    return null;
+  }
+  if ("$parseRaw" in params.text?.format) {
+    const text_format = params.text?.format;
+    return text_format.$parseRaw(content);
+  }
+  return JSON.parse(content);
+};
+function hasAutoParseableInput2(params) {
+  if (isAutoParsableResponseFormat(params.text?.format)) {
+    return true;
+  }
+  return false;
+}
+function isAutoParsableTool2(tool) {
+  return tool?.["$brand"] === "auto-parseable-tool";
+}
+var getInputToolByName = function(input_tools, name) {
+  return input_tools.find((tool) => tool.type === "function" && tool.name === name);
+};
+var parseToolCall2 = function(params, toolCall) {
+  const inputTool = getInputToolByName(params.tools ?? [], toolCall.name);
+  return {
+    ...toolCall,
+    ...toolCall,
+    parsed_arguments: isAutoParsableTool2(inputTool) ? inputTool.$parseRaw(toolCall.arguments) : inputTool?.strict ? JSON.parse(toolCall.arguments) : null
+  };
+};
+function addOutputText(rsp) {
+  const texts = [];
+  for (const output of rsp.output) {
+    if (output.type !== "message") {
+      continue;
+    }
+    for (const content of output.content) {
+      if (content.type === "output_text") {
+        texts.push(content.text);
+      }
+    }
+  }
+  rsp.output_text = texts.join("");
+}
+
+// node_modules/openai/resources/responses/input-items.mjs
+class InputItems extends APIResource {
+  list(responseId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.list(responseId, {}, query);
+    }
+    return this._client.getAPIList(`/responses/${responseId}/input_items`, ResponseItemsPage, {
+      query,
+      ...options
+    });
+  }
+}
+
+// node_modules/openai/lib/responses/ResponseStream.mjs
+var finalizeResponse = function(snapshot, params) {
+  return maybeParseResponse(snapshot, params);
+};
+var __classPrivateFieldSet6 = function(receiver, state, value, kind2, f) {
+  if (kind2 === "m")
+    throw new TypeError("Private method is not writable");
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a setter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot write private member to an object whose class did not declare it");
+  return kind2 === "a" ? f.call(receiver, value) : f ? f.value = value : state.set(receiver, value), value;
+};
+var __classPrivateFieldGet7 = function(receiver, state, kind2, f) {
+  if (kind2 === "a" && !f)
+    throw new TypeError("Private accessor was defined without a getter");
+  if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver))
+    throw new TypeError("Cannot read private member from an object whose class did not declare it");
+  return kind2 === "m" ? f : kind2 === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
+};
+var _ResponseStream_instances;
+var _ResponseStream_params;
+var _ResponseStream_currentResponseSnapshot;
+var _ResponseStream_finalResponse;
+var _ResponseStream_beginRequest;
+var _ResponseStream_addEvent;
+var _ResponseStream_endRequest;
+var _ResponseStream_accumulateResponse;
+
+class ResponseStream extends EventStream {
+  constructor(params) {
+    super();
+    _ResponseStream_instances.add(this);
+    _ResponseStream_params.set(this, undefined);
+    _ResponseStream_currentResponseSnapshot.set(this, undefined);
+    _ResponseStream_finalResponse.set(this, undefined);
+    __classPrivateFieldSet6(this, _ResponseStream_params, params, "f");
+  }
+  static createResponse(client, params, options) {
+    const runner = new ResponseStream(params);
+    runner._run(() => runner._createResponse(client, params, {
+      ...options,
+      headers: { ...options?.headers, "X-Stainless-Helper-Method": "stream" }
+    }));
+    return runner;
+  }
+  async _createResponse(client, params, options) {
+    const signal = options?.signal;
+    if (signal) {
+      if (signal.aborted)
+        this.controller.abort();
+      signal.addEventListener("abort", () => this.controller.abort());
+    }
+    __classPrivateFieldGet7(this, _ResponseStream_instances, "m", _ResponseStream_beginRequest).call(this);
+    const stream = await client.responses.create({ ...params, stream: true }, { ...options, signal: this.controller.signal });
+    this._connected();
+    for await (const event of stream) {
+      __classPrivateFieldGet7(this, _ResponseStream_instances, "m", _ResponseStream_addEvent).call(this, event);
+    }
+    if (stream.controller.signal?.aborted) {
+      throw new APIUserAbortError;
+    }
+    return __classPrivateFieldGet7(this, _ResponseStream_instances, "m", _ResponseStream_endRequest).call(this);
+  }
+  [(_ResponseStream_params = new WeakMap, _ResponseStream_currentResponseSnapshot = new WeakMap, _ResponseStream_finalResponse = new WeakMap, _ResponseStream_instances = new WeakSet, _ResponseStream_beginRequest = function _ResponseStream_beginRequest() {
+    if (this.ended)
+      return;
+    __classPrivateFieldSet6(this, _ResponseStream_currentResponseSnapshot, undefined, "f");
+  }, _ResponseStream_addEvent = function _ResponseStream_addEvent(event) {
+    if (this.ended)
+      return;
+    const response = __classPrivateFieldGet7(this, _ResponseStream_instances, "m", _ResponseStream_accumulateResponse).call(this, event);
+    this._emit("event", event);
+    switch (event.type) {
+      case "response.output_text.delta": {
+        const output = response.output[event.output_index];
+        if (!output) {
+          throw new OpenAIError(`missing output at index ${event.output_index}`);
+        }
+        if (output.type === "message") {
+          const content = output.content[event.content_index];
+          if (!content) {
+            throw new OpenAIError(`missing content at index ${event.content_index}`);
+          }
+          if (content.type !== "output_text") {
+            throw new OpenAIError(`expected content to be 'output_text', got ${content.type}`);
+          }
+          this._emit("response.output_text.delta", {
+            ...event,
+            snapshot: content.text
+          });
+        }
+        break;
+      }
+      case "response.function_call_arguments.delta": {
+        const output = response.output[event.output_index];
+        if (!output) {
+          throw new OpenAIError(`missing output at index ${event.output_index}`);
+        }
+        if (output.type === "function_call") {
+          this._emit("response.function_call_arguments.delta", {
+            ...event,
+            snapshot: output.arguments
+          });
+        }
+        break;
+      }
+      default:
+        this._emit(event.type, event);
+        break;
+    }
+  }, _ResponseStream_endRequest = function _ResponseStream_endRequest() {
+    if (this.ended) {
+      throw new OpenAIError(`stream has ended, this shouldn't happen`);
+    }
+    const snapshot = __classPrivateFieldGet7(this, _ResponseStream_currentResponseSnapshot, "f");
+    if (!snapshot) {
+      throw new OpenAIError(`request ended without sending any events`);
+    }
+    __classPrivateFieldSet6(this, _ResponseStream_currentResponseSnapshot, undefined, "f");
+    const parsedResponse = finalizeResponse(snapshot, __classPrivateFieldGet7(this, _ResponseStream_params, "f"));
+    __classPrivateFieldSet6(this, _ResponseStream_finalResponse, parsedResponse, "f");
+    return parsedResponse;
+  }, _ResponseStream_accumulateResponse = function _ResponseStream_accumulateResponse(event) {
+    let snapshot = __classPrivateFieldGet7(this, _ResponseStream_currentResponseSnapshot, "f");
+    if (!snapshot) {
+      if (event.type !== "response.created") {
+        throw new OpenAIError(`When snapshot hasn't been set yet, expected 'response.created' event, got ${event.type}`);
+      }
+      snapshot = __classPrivateFieldSet6(this, _ResponseStream_currentResponseSnapshot, event.response, "f");
+      return snapshot;
+    }
+    switch (event.type) {
+      case "response.output_item.added": {
+        snapshot.output.push(event.item);
+        break;
+      }
+      case "response.content_part.added": {
+        const output = snapshot.output[event.output_index];
+        if (!output) {
+          throw new OpenAIError(`missing output at index ${event.output_index}`);
+        }
+        if (output.type === "message") {
+          output.content.push(event.part);
+        }
+        break;
+      }
+      case "response.output_text.delta": {
+        const output = snapshot.output[event.output_index];
+        if (!output) {
+          throw new OpenAIError(`missing output at index ${event.output_index}`);
+        }
+        if (output.type === "message") {
+          const content = output.content[event.content_index];
+          if (!content) {
+            throw new OpenAIError(`missing content at index ${event.content_index}`);
+          }
+          if (content.type !== "output_text") {
+            throw new OpenAIError(`expected content to be 'output_text', got ${content.type}`);
+          }
+          content.text += event.delta;
+        }
+        break;
+      }
+      case "response.function_call_arguments.delta": {
+        const output = snapshot.output[event.output_index];
+        if (!output) {
+          throw new OpenAIError(`missing output at index ${event.output_index}`);
+        }
+        if (output.type === "function_call") {
+          output.arguments += event.delta;
+        }
+        break;
+      }
+      case "response.completed": {
+        __classPrivateFieldSet6(this, _ResponseStream_currentResponseSnapshot, event.response, "f");
+        break;
+      }
+    }
+    return snapshot;
+  }, Symbol.asyncIterator)]() {
+    const pushQueue = [];
+    const readQueue = [];
+    let done = false;
+    this.on("event", (event) => {
+      const reader = readQueue.shift();
+      if (reader) {
+        reader.resolve(event);
+      } else {
+        pushQueue.push(event);
+      }
+    });
+    this.on("end", () => {
+      done = true;
+      for (const reader of readQueue) {
+        reader.resolve(undefined);
+      }
+      readQueue.length = 0;
+    });
+    this.on("abort", (err) => {
+      done = true;
+      for (const reader of readQueue) {
+        reader.reject(err);
+      }
+      readQueue.length = 0;
+    });
+    this.on("error", (err) => {
+      done = true;
+      for (const reader of readQueue) {
+        reader.reject(err);
+      }
+      readQueue.length = 0;
+    });
+    return {
+      next: async () => {
+        if (!pushQueue.length) {
+          if (done) {
+            return { value: undefined, done: true };
+          }
+          return new Promise((resolve, reject) => readQueue.push({ resolve, reject })).then((event2) => event2 ? { value: event2, done: false } : { value: undefined, done: true });
+        }
+        const event = pushQueue.shift();
+        return { value: event, done: false };
+      },
+      return: async () => {
+        this.abort();
+        return { value: undefined, done: true };
+      }
+    };
+  }
+  async finalResponse() {
+    await this.done();
+    const response = __classPrivateFieldGet7(this, _ResponseStream_finalResponse, "f");
+    if (!response)
+      throw new OpenAIError("stream ended without producing a ChatCompletion");
+    return response;
+  }
+}
+
+// node_modules/openai/resources/responses/responses.mjs
+class Responses extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.inputItems = new InputItems(this._client);
+  }
+  create(body, options) {
+    return this._client.post("/responses", { body, ...options, stream: body.stream ?? false })._thenUnwrap((rsp) => {
+      if ("object" in rsp && rsp.object === "response") {
+        addOutputText(rsp);
+      }
+      return rsp;
+    });
+  }
+  retrieve(responseId, query = {}, options) {
+    if (isRequestOptions(query)) {
+      return this.retrieve(responseId, {}, query);
+    }
+    return this._client.get(`/responses/${responseId}`, { query, ...options });
+  }
+  del(responseId, options) {
+    return this._client.delete(`/responses/${responseId}`, {
+      ...options,
+      headers: { Accept: "*/*", ...options?.headers }
+    });
+  }
+  parse(body, options) {
+    return this._client.responses.create(body, options)._thenUnwrap((response) => parseResponse(response, body));
+  }
+  stream(body, options) {
+    return ResponseStream.createResponse(this._client, body, options);
+  }
+}
+
+class ResponseItemsPage extends CursorPage {
+}
+Responses.InputItems = InputItems;
+// node_modules/openai/resources/uploads/parts.mjs
+class Parts extends APIResource {
+  create(uploadId, body, options) {
+    return this._client.post(`/uploads/${uploadId}/parts`, multipartFormRequestOptions({ body, ...options }));
+  }
+}
+
+// node_modules/openai/resources/uploads/uploads.mjs
+class Uploads extends APIResource {
+  constructor() {
+    super(...arguments);
+    this.parts = new Parts(this._client);
+  }
+  create(body, options) {
+    return this._client.post("/uploads", { body, ...options });
+  }
+  cancel(uploadId, options) {
+    return this._client.post(`/uploads/${uploadId}/cancel`, options);
+  }
+  complete(uploadId, body, options) {
+    return this._client.post(`/uploads/${uploadId}/complete`, { body, ...options });
+  }
+}
+Uploads.Parts = Parts;
 // node_modules/openai/lib/Util.mjs
 var allSettledWithThrow = async (promises) => {
   const results = await Promise.allSettled(promises);
@@ -3711,8 +4965,8 @@ var allSettledWithThrow = async (promises) => {
   return values;
 };
 
-// node_modules/openai/resources/beta/vector-stores/files.mjs
-class Files extends APIResource {
+// node_modules/openai/resources/vector-stores/files.mjs
+class Files2 extends APIResource {
   create(vectorStoreId, body, options) {
     return this._client.post(`/vector_stores/${vectorStoreId}/files`, {
       body,
@@ -3722,6 +4976,13 @@ class Files extends APIResource {
   }
   retrieve(vectorStoreId, fileId, options) {
     return this._client.get(`/vector_stores/${vectorStoreId}/files/${fileId}`, {
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
+  update(vectorStoreId, fileId, body, options) {
+    return this._client.post(`/vector_stores/${vectorStoreId}/files/${fileId}`, {
+      body,
       ...options,
       headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
     });
@@ -3787,15 +5048,20 @@ class Files extends APIResource {
     const fileInfo = await this.upload(vectorStoreId, file, options);
     return await this.poll(vectorStoreId, fileInfo.id, options);
   }
+  content(vectorStoreId, fileId, options) {
+    return this._client.getAPIList(`/vector_stores/${vectorStoreId}/files/${fileId}/content`, FileContentResponsesPage, { ...options, headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers } });
+  }
 }
 
 class VectorStoreFilesPage extends CursorPage {
 }
-(function(Files2) {
-  Files2.VectorStoreFilesPage = VectorStoreFilesPage;
-})(Files || (Files = {}));
 
-// node_modules/openai/resources/beta/vector-stores/file-batches.mjs
+class FileContentResponsesPage extends Page {
+}
+Files2.VectorStoreFilesPage = VectorStoreFilesPage;
+Files2.FileContentResponsesPage = FileContentResponsesPage;
+
+// node_modules/openai/resources/vector-stores/file-batches.mjs
 class FileBatches extends APIResource {
   create(vectorStoreId, body, options) {
     return this._client.post(`/vector_stores/${vectorStoreId}/file_batches`, {
@@ -3881,14 +5147,12 @@ class FileBatches extends APIResource {
     });
   }
 }
-(function(FileBatches2) {
-})(FileBatches || (FileBatches = {}));
 
-// node_modules/openai/resources/beta/vector-stores/vector-stores.mjs
+// node_modules/openai/resources/vector-stores/vector-stores.mjs
 class VectorStores extends APIResource {
   constructor() {
     super(...arguments);
-    this.files = new Files(this._client);
+    this.files = new Files2(this._client);
     this.fileBatches = new FileBatches(this._client);
   }
   create(body, options) {
@@ -3927,239 +5191,27 @@ class VectorStores extends APIResource {
       headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
     });
   }
+  search(vectorStoreId, body, options) {
+    return this._client.getAPIList(`/vector_stores/${vectorStoreId}/search`, VectorStoreSearchResponsesPage, {
+      body,
+      method: "post",
+      ...options,
+      headers: { "OpenAI-Beta": "assistants=v2", ...options?.headers }
+    });
+  }
 }
 
 class VectorStoresPage extends CursorPage {
 }
-(function(VectorStores2) {
-  VectorStores2.VectorStoresPage = VectorStoresPage;
-  VectorStores2.Files = Files;
-  VectorStores2.VectorStoreFilesPage = VectorStoreFilesPage;
-  VectorStores2.FileBatches = FileBatches;
-})(VectorStores || (VectorStores = {}));
 
-// node_modules/openai/resources/beta/beta.mjs
-class Beta extends APIResource {
-  constructor() {
-    super(...arguments);
-    this.vectorStores = new VectorStores(this._client);
-    this.chat = new Chat2(this._client);
-    this.assistants = new Assistants(this._client);
-    this.threads = new Threads(this._client);
-  }
+class VectorStoreSearchResponsesPage extends Page {
 }
-(function(Beta2) {
-  Beta2.VectorStores = VectorStores;
-  Beta2.VectorStoresPage = VectorStoresPage;
-  Beta2.Chat = Chat2;
-  Beta2.Assistants = Assistants;
-  Beta2.AssistantsPage = AssistantsPage;
-  Beta2.Threads = Threads;
-})(Beta || (Beta = {}));
-// node_modules/openai/resources/completions.mjs
-class Completions3 extends APIResource {
-  create(body, options) {
-    return this._client.post("/completions", { body, ...options, stream: body.stream ?? false });
-  }
-}
-(function(Completions4) {
-})(Completions3 || (Completions3 = {}));
-// node_modules/openai/resources/embeddings.mjs
-class Embeddings extends APIResource {
-  create(body, options) {
-    return this._client.post("/embeddings", { body, ...options });
-  }
-}
-(function(Embeddings2) {
-})(Embeddings || (Embeddings = {}));
-// node_modules/openai/resources/files.mjs
-class Files2 extends APIResource {
-  create(body, options) {
-    return this._client.post("/files", multipartFormRequestOptions({ body, ...options }));
-  }
-  retrieve(fileId, options) {
-    return this._client.get(`/files/${fileId}`, options);
-  }
-  list(query = {}, options) {
-    if (isRequestOptions(query)) {
-      return this.list({}, query);
-    }
-    return this._client.getAPIList("/files", FileObjectsPage, { query, ...options });
-  }
-  del(fileId, options) {
-    return this._client.delete(`/files/${fileId}`, options);
-  }
-  content(fileId, options) {
-    return this._client.get(`/files/${fileId}/content`, { ...options, __binaryResponse: true });
-  }
-  retrieveContent(fileId, options) {
-    return this._client.get(`/files/${fileId}/content`, {
-      ...options,
-      headers: { Accept: "application/json", ...options?.headers }
-    });
-  }
-  async waitForProcessing(id, { pollInterval = 5000, maxWait = 30 * 60 * 1000 } = {}) {
-    const TERMINAL_STATES = new Set(["processed", "error", "deleted"]);
-    const start = Date.now();
-    let file = await this.retrieve(id);
-    while (!file.status || !TERMINAL_STATES.has(file.status)) {
-      await sleep(pollInterval);
-      file = await this.retrieve(id);
-      if (Date.now() - start > maxWait) {
-        throw new APIConnectionTimeoutError({
-          message: `Giving up on waiting for file ${id} to finish processing after ${maxWait} milliseconds.`
-        });
-      }
-    }
-    return file;
-  }
-}
-
-class FileObjectsPage extends Page {
-}
-(function(Files3) {
-  Files3.FileObjectsPage = FileObjectsPage;
-})(Files2 || (Files2 = {}));
-// node_modules/openai/resources/fine-tuning/jobs/checkpoints.mjs
-class Checkpoints extends APIResource {
-  list(fineTuningJobId, query = {}, options) {
-    if (isRequestOptions(query)) {
-      return this.list(fineTuningJobId, {}, query);
-    }
-    return this._client.getAPIList(`/fine_tuning/jobs/${fineTuningJobId}/checkpoints`, FineTuningJobCheckpointsPage, { query, ...options });
-  }
-}
-
-class FineTuningJobCheckpointsPage extends CursorPage {
-}
-(function(Checkpoints2) {
-  Checkpoints2.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
-})(Checkpoints || (Checkpoints = {}));
-
-// node_modules/openai/resources/fine-tuning/jobs/jobs.mjs
-class Jobs extends APIResource {
-  constructor() {
-    super(...arguments);
-    this.checkpoints = new Checkpoints(this._client);
-  }
-  create(body, options) {
-    return this._client.post("/fine_tuning/jobs", { body, ...options });
-  }
-  retrieve(fineTuningJobId, options) {
-    return this._client.get(`/fine_tuning/jobs/${fineTuningJobId}`, options);
-  }
-  list(query = {}, options) {
-    if (isRequestOptions(query)) {
-      return this.list({}, query);
-    }
-    return this._client.getAPIList("/fine_tuning/jobs", FineTuningJobsPage, { query, ...options });
-  }
-  cancel(fineTuningJobId, options) {
-    return this._client.post(`/fine_tuning/jobs/${fineTuningJobId}/cancel`, options);
-  }
-  listEvents(fineTuningJobId, query = {}, options) {
-    if (isRequestOptions(query)) {
-      return this.listEvents(fineTuningJobId, {}, query);
-    }
-    return this._client.getAPIList(`/fine_tuning/jobs/${fineTuningJobId}/events`, FineTuningJobEventsPage, {
-      query,
-      ...options
-    });
-  }
-}
-
-class FineTuningJobsPage extends CursorPage {
-}
-
-class FineTuningJobEventsPage extends CursorPage {
-}
-(function(Jobs2) {
-  Jobs2.FineTuningJobsPage = FineTuningJobsPage;
-  Jobs2.FineTuningJobEventsPage = FineTuningJobEventsPage;
-  Jobs2.Checkpoints = Checkpoints;
-  Jobs2.FineTuningJobCheckpointsPage = FineTuningJobCheckpointsPage;
-})(Jobs || (Jobs = {}));
-
-// node_modules/openai/resources/fine-tuning/fine-tuning.mjs
-class FineTuning extends APIResource {
-  constructor() {
-    super(...arguments);
-    this.jobs = new Jobs(this._client);
-  }
-}
-(function(FineTuning2) {
-  FineTuning2.Jobs = Jobs;
-  FineTuning2.FineTuningJobsPage = FineTuningJobsPage;
-  FineTuning2.FineTuningJobEventsPage = FineTuningJobEventsPage;
-})(FineTuning || (FineTuning = {}));
-// node_modules/openai/resources/images.mjs
-class Images extends APIResource {
-  createVariation(body, options) {
-    return this._client.post("/images/variations", multipartFormRequestOptions({ body, ...options }));
-  }
-  edit(body, options) {
-    return this._client.post("/images/edits", multipartFormRequestOptions({ body, ...options }));
-  }
-  generate(body, options) {
-    return this._client.post("/images/generations", { body, ...options });
-  }
-}
-(function(Images2) {
-})(Images || (Images = {}));
-// node_modules/openai/resources/models.mjs
-class Models extends APIResource {
-  retrieve(model, options) {
-    return this._client.get(`/models/${model}`, options);
-  }
-  list(options) {
-    return this._client.getAPIList("/models", ModelsPage, options);
-  }
-  del(model, options) {
-    return this._client.delete(`/models/${model}`, options);
-  }
-}
-
-class ModelsPage extends Page {
-}
-(function(Models2) {
-  Models2.ModelsPage = ModelsPage;
-})(Models || (Models = {}));
-// node_modules/openai/resources/moderations.mjs
-class Moderations extends APIResource {
-  create(body, options) {
-    return this._client.post("/moderations", { body, ...options });
-  }
-}
-(function(Moderations2) {
-})(Moderations || (Moderations = {}));
-// node_modules/openai/resources/uploads/parts.mjs
-class Parts extends APIResource {
-  create(uploadId, body, options) {
-    return this._client.post(`/uploads/${uploadId}/parts`, multipartFormRequestOptions({ body, ...options }));
-  }
-}
-(function(Parts2) {
-})(Parts || (Parts = {}));
-
-// node_modules/openai/resources/uploads/uploads.mjs
-class Uploads extends APIResource {
-  constructor() {
-    super(...arguments);
-    this.parts = new Parts(this._client);
-  }
-  create(body, options) {
-    return this._client.post("/uploads", { body, ...options });
-  }
-  cancel(uploadId, options) {
-    return this._client.post(`/uploads/${uploadId}/cancel`, options);
-  }
-  complete(uploadId, body, options) {
-    return this._client.post(`/uploads/${uploadId}/complete`, { body, ...options });
-  }
-}
-(function(Uploads2) {
-  Uploads2.Parts = Parts;
-})(Uploads || (Uploads = {}));
+VectorStores.VectorStoresPage = VectorStoresPage;
+VectorStores.VectorStoreSearchResponsesPage = VectorStoreSearchResponsesPage;
+VectorStores.Files = Files2;
+VectorStores.VectorStoreFilesPage = VectorStoreFilesPage;
+VectorStores.FileContentResponsesPage = FileContentResponsesPage;
+VectorStores.FileBatches = FileBatches;
 // node_modules/openai/index.mjs
 var _a;
 
@@ -4188,15 +5240,18 @@ class OpenAI extends APIClient {
     this.completions = new Completions3(this);
     this.chat = new Chat(this);
     this.embeddings = new Embeddings(this);
-    this.files = new Files2(this);
+    this.files = new Files(this);
     this.images = new Images(this);
     this.audio = new Audio(this);
     this.moderations = new Moderations(this);
     this.models = new Models(this);
     this.fineTuning = new FineTuning(this);
+    this.vectorStores = new VectorStores(this);
     this.beta = new Beta(this);
     this.batches = new Batches(this);
     this.uploads = new Uploads(this);
+    this.responses = new Responses(this);
+    this.evals = new Evals(this);
     this._options = options;
     this.apiKey = apiKey;
     this.organization = organization;
@@ -4215,6 +5270,9 @@ class OpenAI extends APIClient {
   }
   authHeaders(opts) {
     return { Authorization: `Bearer ${this.apiKey}` };
+  }
+  stringifyQuery(query) {
+    return stringify(query, { arrayFormat: "brackets" });
   }
 }
 _a = OpenAI;
@@ -4235,25 +5293,28 @@ OpenAI.PermissionDeniedError = PermissionDeniedError;
 OpenAI.UnprocessableEntityError = UnprocessableEntityError;
 OpenAI.toFile = toFile;
 OpenAI.fileFromPath = fileFromPath;
-(function(OpenAI2) {
-  OpenAI2.Page = Page;
-  OpenAI2.CursorPage = CursorPage;
-  OpenAI2.Completions = Completions3;
-  OpenAI2.Chat = Chat;
-  OpenAI2.Embeddings = Embeddings;
-  OpenAI2.Files = Files2;
-  OpenAI2.FileObjectsPage = FileObjectsPage;
-  OpenAI2.Images = Images;
-  OpenAI2.Audio = Audio;
-  OpenAI2.Moderations = Moderations;
-  OpenAI2.Models = Models;
-  OpenAI2.ModelsPage = ModelsPage;
-  OpenAI2.FineTuning = FineTuning;
-  OpenAI2.Beta = Beta;
-  OpenAI2.Batches = Batches;
-  OpenAI2.BatchesPage = BatchesPage;
-  OpenAI2.Uploads = Uploads;
-})(OpenAI || (OpenAI = {}));
+OpenAI.Completions = Completions3;
+OpenAI.Chat = Chat;
+OpenAI.ChatCompletionsPage = ChatCompletionsPage;
+OpenAI.Embeddings = Embeddings;
+OpenAI.Files = Files;
+OpenAI.FileObjectsPage = FileObjectsPage;
+OpenAI.Images = Images;
+OpenAI.Audio = Audio;
+OpenAI.Moderations = Moderations;
+OpenAI.Models = Models;
+OpenAI.ModelsPage = ModelsPage;
+OpenAI.FineTuning = FineTuning;
+OpenAI.VectorStores = VectorStores;
+OpenAI.VectorStoresPage = VectorStoresPage;
+OpenAI.VectorStoreSearchResponsesPage = VectorStoreSearchResponsesPage;
+OpenAI.Beta = Beta;
+OpenAI.Batches = Batches;
+OpenAI.BatchesPage = BatchesPage;
+OpenAI.Uploads = Uploads;
+OpenAI.Responses = Responses;
+OpenAI.Evals = Evals;
+OpenAI.EvalListResponsesPage = EvalListResponsesPage;
 var _deployments_endpoints = new Set([
   "/completions",
   "/chat/completions",
@@ -4266,7 +5327,7 @@ var _deployments_endpoints = new Set([
 var openai_default = OpenAI;
 
 // node_modules/marked/lib/marked.esm.js
-function _getDefaults() {
+var _getDefaults = function() {
   return {
     async: false,
     breaks: false,
@@ -4279,12 +5340,12 @@ function _getDefaults() {
     tokenizer: null,
     walkTokens: null
   };
-}
-function changeDefaults(newDefaults) {
+};
+var changeDefaults = function(newDefaults) {
   _defaults = newDefaults;
-}
-function escape$1(html, encode) {
-  if (encode) {
+};
+var escape$1 = function(html, encode2) {
+  if (encode2) {
     if (escapeTest.test(html)) {
       return html.replace(escapeReplace, getEscapeReplacement);
     }
@@ -4294,8 +5355,8 @@ function escape$1(html, encode) {
     }
   }
   return html;
-}
-function edit(regex, opt) {
+};
+var edit = function(regex, opt) {
   let source = typeof regex === "string" ? regex : regex.source;
   opt = opt || "";
   const obj = {
@@ -4310,16 +5371,16 @@ function edit(regex, opt) {
     }
   };
   return obj;
-}
-function cleanUrl(href) {
+};
+var cleanUrl = function(href) {
   try {
     href = encodeURI(href).replace(/%25/g, "%");
   } catch {
     return null;
   }
   return href;
-}
-function splitCells(tableRow, count) {
+};
+var splitCells = function(tableRow, count) {
   const row = tableRow.replace(/\|/g, (match, offset, str2) => {
     let escaped = false;
     let curr = offset;
@@ -4350,8 +5411,8 @@ function splitCells(tableRow, count) {
     cells[i] = cells[i].trim().replace(/\\\|/g, "|");
   }
   return cells;
-}
-function rtrim(str2, c, invert) {
+};
+var rtrim = function(str2, c, invert) {
   const l = str2.length;
   if (l === 0) {
     return "";
@@ -4368,8 +5429,8 @@ function rtrim(str2, c, invert) {
     }
   }
   return str2.slice(0, l - suffLen);
-}
-function findClosingBracket(str2, b) {
+};
+var findClosingBracket = function(str2, b) {
   if (str2.indexOf(b[1]) === -1) {
     return -1;
   }
@@ -4387,8 +5448,8 @@ function findClosingBracket(str2, b) {
     }
   }
   return -1;
-}
-function outputLink(cap, link, raw, lexer) {
+};
+var outputLink = function(cap, link, raw, lexer) {
   const href = link.href;
   const title = link.title ? escape$1(link.title) : null;
   const text = cap[1].replace(/\\([\[\]])/g, "$1");
@@ -4412,8 +5473,8 @@ function outputLink(cap, link, raw, lexer) {
     title,
     text: escape$1(text)
   };
-}
-function indentCodeCompensation(raw, text) {
+};
+var indentCodeCompensation = function(raw, text) {
   const matchIndentToCode = raw.match(/^(\s+)(?:```)/);
   if (matchIndentToCode === null) {
     return text;
@@ -4430,10 +5491,10 @@ function indentCodeCompensation(raw, text) {
     }
     return node;
   }).join("\n");
-}
-function marked(src, opt) {
+};
+var marked = function(src, opt) {
   return markedInstance.parse(src, opt);
-}
+};
 var _defaults = _getDefaults();
 var escapeTest = /[&<>"']/;
 var escapeReplace = new RegExp(escapeTest.source, "g");
@@ -4469,7 +5530,7 @@ class _Tokenizer {
   code(src) {
     const cap = this.rules.block.code.exec(src);
     if (cap) {
-      const text = cap[0].replace(/^ {1,4}/gm, "");
+      const text = cap[0].replace(/^(?: {1,4}| {0,3}\t)/gm, "");
       return {
         type: "code",
         raw: cap[0],
@@ -4615,22 +5676,22 @@ class _Tokenizer {
         }
         raw = cap[0];
         src = src.substring(raw.length);
-        let line = cap[2].split("\n", 1)[0].replace(/^\t+/, (t) => " ".repeat(3 * t.length));
+        let line2 = cap[2].split("\n", 1)[0].replace(/^\t+/, (t) => " ".repeat(3 * t.length));
         let nextLine = src.split("\n", 1)[0];
-        let blankLine = !line.trim();
+        let blankLine = !line2.trim();
         let indent = 0;
         if (this.options.pedantic) {
           indent = 2;
-          itemContents = line.trimStart();
+          itemContents = line2.trimStart();
         } else if (blankLine) {
           indent = cap[1].length + 1;
         } else {
           indent = cap[2].search(/[^ ]/);
           indent = indent > 4 ? 1 : indent;
-          itemContents = line.slice(indent);
+          itemContents = line2.slice(indent);
           indent += cap[1].length;
         }
-        if (blankLine && /^ *$/.test(nextLine)) {
+        if (blankLine && /^[ \t]*$/.test(nextLine)) {
           raw += nextLine + "\n";
           src = src.substring(nextLine.length + 1);
           endEarly = true;
@@ -4640,11 +5701,16 @@ class _Tokenizer {
           const hrRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|\$)`);
           const fencesBeginRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}(?:\`\`\`|~~~)`);
           const headingBeginRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}#`);
+          const htmlBeginRegex = new RegExp(`^ {0,${Math.min(3, indent - 1)}}<(?:[a-z].*>|!--)`, "i");
           while (src) {
             const rawLine = src.split("\n", 1)[0];
+            let nextLineWithoutTabs;
             nextLine = rawLine;
             if (this.options.pedantic) {
               nextLine = nextLine.replace(/^ {1,4}(?=( {4})*[^ ])/g, "  ");
+              nextLineWithoutTabs = nextLine;
+            } else {
+              nextLineWithoutTabs = nextLine.replace(/\t/g, "    ");
             }
             if (fencesBeginRegex.test(nextLine)) {
               break;
@@ -4652,28 +5718,31 @@ class _Tokenizer {
             if (headingBeginRegex.test(nextLine)) {
               break;
             }
+            if (htmlBeginRegex.test(nextLine)) {
+              break;
+            }
             if (nextBulletRegex.test(nextLine)) {
               break;
             }
-            if (hrRegex.test(src)) {
+            if (hrRegex.test(nextLine)) {
               break;
             }
-            if (nextLine.search(/[^ ]/) >= indent || !nextLine.trim()) {
-              itemContents += "\n" + nextLine.slice(indent);
+            if (nextLineWithoutTabs.search(/[^ ]/) >= indent || !nextLine.trim()) {
+              itemContents += "\n" + nextLineWithoutTabs.slice(indent);
             } else {
               if (blankLine) {
                 break;
               }
-              if (line.search(/[^ ]/) >= 4) {
+              if (line2.replace(/\t/g, "    ").search(/[^ ]/) >= 4) {
                 break;
               }
-              if (fencesBeginRegex.test(line)) {
+              if (fencesBeginRegex.test(line2)) {
                 break;
               }
-              if (headingBeginRegex.test(line)) {
+              if (headingBeginRegex.test(line2)) {
                 break;
               }
-              if (hrRegex.test(line)) {
+              if (hrRegex.test(line2)) {
                 break;
               }
               itemContents += "\n" + nextLine;
@@ -4683,13 +5752,13 @@ class _Tokenizer {
             }
             raw += rawLine + "\n";
             src = src.substring(rawLine.length + 1);
-            line = nextLine.slice(indent);
+            line2 = nextLineWithoutTabs.slice(indent);
           }
         }
         if (!list.loose) {
           if (endsWithBlankLine) {
             list.loose = true;
-          } else if (/\n *\n *$/.test(raw)) {
+          } else if (/\n[ \t]*\n[ \t]*$/.test(raw)) {
             endsWithBlankLine = true;
           }
         }
@@ -5111,21 +6180,21 @@ class _Tokenizer {
     }
   }
 }
-var newline = /^(?: *(?:\n|$))+/;
-var blockCode = /^( {4}[^\n]+(?:\n(?: *(?:\n|$))*)?)+/;
+var newline = /^(?:[ \t]*(?:\n|$))+/;
+var blockCode = /^((?: {4}| {0,3}\t)[^\n]+(?:\n(?:[ \t]*(?:\n|$))*)?)+/;
 var fences = /^ {0,3}(`{3,}(?=[^`\n]*(?:\n|$))|~{3,})([^\n]*)(?:\n|$)(?:|([\s\S]*?)(?:\n|$))(?: {0,3}\1[~`]* *(?=\n|$)|$)/;
 var hr = /^ {0,3}((?:-[\t ]*){3,}|(?:_[ \t]*){3,}|(?:\*[ \t]*){3,})(?:\n+|$)/;
 var heading = /^ {0,3}(#{1,6})(?=\s|$)(.*)(?:\n+|$)/;
 var bullet = /(?:[*+-]|\d{1,9}[.)])/;
-var lheading = edit(/^(?!bull |blockCode|fences|blockquote|heading|html)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html))+?)\n {0,3}(=+|-+) *(?:\n+|$)/).replace(/bull/g, bullet).replace(/blockCode/g, / {4}/).replace(/fences/g, / {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g, / {0,3}>/).replace(/heading/g, / {0,3}#{1,6}/).replace(/html/g, / {0,3}<[^\n>]+>\n/).getRegex();
+var lheading = edit(/^(?!bull |blockCode|fences|blockquote|heading|html)((?:.|\n(?!\s*?\n|bull |blockCode|fences|blockquote|heading|html))+?)\n {0,3}(=+|-+) *(?:\n+|$)/).replace(/bull/g, bullet).replace(/blockCode/g, /(?: {4}| {0,3}\t)/).replace(/fences/g, / {0,3}(?:`{3,}|~{3,})/).replace(/blockquote/g, / {0,3}>/).replace(/heading/g, / {0,3}#{1,6}/).replace(/html/g, / {0,3}<[^\n>]+>\n/).getRegex();
 var _paragraph = /^([^\n]+(?:\n(?!hr|heading|lheading|blockquote|fences|list|html|table| +\n)[^\n]+)*)/;
 var blockText = /^[^\n]+/;
 var _blockLabel = /(?!\s*\])(?:\\.|[^\[\]\\])+/;
-var def = edit(/^ {0,3}\[(label)\]: *(?:\n *)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n *)?| *\n *)(title))? *(?:\n+|$)/).replace("label", _blockLabel).replace("title", /(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex();
+var def = edit(/^ {0,3}\[(label)\]: *(?:\n[ \t]*)?([^<\s][^\s]*|<.*?>)(?:(?: +(?:\n[ \t]*)?| *\n[ \t]*)(title))? *(?:\n+|$)/).replace("label", _blockLabel).replace("title", /(?:"(?:\\"?|[^"\\])*"|'[^'\n]*(?:\n[^'\n]+)*\n?'|\([^()]*\))/).getRegex();
 var list = edit(/^( {0,3}bull)([ \t][^\n]+?)?(?:\n|$)/).replace(/bull/g, bullet).getRegex();
-var _tag = "address|article|aside|base|basefont|blockquote|body|caption" + "|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption" + "|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe" + "|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option" + "|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title" + "|tr|track|ul";
+var _tag = "address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul";
 var _comment = /<!--(?:-?>|[\s\S]*?(?:-->|$))/;
-var html = edit("^ {0,3}(?:" + "<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)" + "|comment[^\\n]*(\\n+|$)" + "|<\\?[\\s\\S]*?(?:\\?>\\n*|$)" + "|<![A-Z][\\s\\S]*?(?:>\\n*|$)" + "|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)" + "|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n *)+\\n|$)" + "|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$)" + "|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n *)+\\n|$)" + ")", "i").replace("comment", _comment).replace("tag", _tag).replace("attribute", / +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex();
+var html = edit("^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n+|$)|comment[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>\\n*|$)|<![A-Z][\\s\\S]*?(?:>\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>\\n*|$)|</?(tag)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ \t]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?:attribute)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ \t]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ \t]*)+\\n|$))", "i").replace("comment", _comment).replace("tag", _tag).replace("attribute", / +[a-zA-Z:_][\w.:-]*(?: *= *"[^"\n]*"| *= *'[^'\n]*'| *= *[^\s"'=<>`]+)?/).getRegex();
 var paragraph = edit(_paragraph).replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("|lheading", "").replace("|table", "").replace("blockquote", " {0,3}>").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
 var blockquote = edit(/^( {0,3}> ?(paragraph|[^\n]*)(?:\n|$))+/).replace("paragraph", paragraph).getRegex();
 var blockNormal = {
@@ -5143,7 +6212,7 @@ var blockNormal = {
   table: noopTest,
   text: blockText
 };
-var gfmTable = edit("^ *([^\\n ].*)\\n" + " {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)" + "(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("blockquote", " {0,3}>").replace("code", " {4}[^\\n]").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
+var gfmTable = edit("^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n|hr|heading|blockquote|code|fences|list|html).*(?:\\n|$))*)\\n*|$)").replace("hr", hr).replace("heading", " {0,3}#{1,6}(?:\\s|$)").replace("blockquote", " {0,3}>").replace("code", "(?: {4}| {0,3}\t)[^\\n]").replace("fences", " {0,3}(?:`{3,}(?=[^`\\n]*\\n)|~{3,})[^\\n]*\\n").replace("list", " {0,3}(?:[*+-]|1[.)]) ").replace("html", "</?(?:tag)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)").replace("tag", _tag).getRegex();
 var blockGfm = {
   ...blockNormal,
   table: gfmTable,
@@ -5151,27 +6220,27 @@ var blockGfm = {
 };
 var blockPedantic = {
   ...blockNormal,
-  html: edit("^ *(?:comment *(?:\\n|\\s*$)" + "|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)" + '|<tag(?:"[^"]*"|\'[^\']*\'|\\s[^\'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))').replace("comment", _comment).replace(/tag/g, "(?!(?:" + "a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub" + "|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)" + "\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),
+  html: edit('^ *(?:comment *(?:\\n|\\s*$)|<(tag)[\\s\\S]+?</\\1> *(?:\\n{2,}|\\s*$)|<tag(?:"[^"]*"|\'[^\']*\'|\\s[^\'"/>\\s]*)*?/?> *(?:\\n{2,}|\\s*$))').replace("comment", _comment).replace(/tag/g, "(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\\b)\\w+(?!:|[^\\w\\s@]*@)\\b").getRegex(),
   def: /^ *\[([^\]]+)\]: *<?([^\s>]+)>?(?: +(["(][^\n]+[")]))? *(?:\n+|$)/,
   heading: /^(#{1,6})(.*)(?:\n+|$)/,
   fences: noopTest,
   lheading: /^(.+?)\n {0,3}(=+|-+) *(?:\n+|$)/,
   paragraph: edit(_paragraph).replace("hr", hr).replace("heading", " *#{1,6} *[^\n]").replace("lheading", lheading).replace("|table", "").replace("blockquote", " {0,3}>").replace("|fences", "").replace("|list", "").replace("|html", "").replace("|tag", "").getRegex()
 };
-var escape = /^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/;
+var escape2 = /^\\([!"#$%&'()*+,\-./:;<=>?@\[\]\\^_`{|}~])/;
 var inlineCode = /^(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/;
 var br = /^( {2,}|\\)\n(?!\s*$)/;
 var inlineText = /^(`+|[^`])(?:(?= {2,}\n)|[\s\S]*?(?:(?=[\\<!\[`*_]|\b_|$)|[^ ](?= {2,}\n)))/;
 var _punctuation = "\\p{P}\\p{S}";
 var punctuation = edit(/^((?![*_])[\spunctuation])/, "u").replace(/punctuation/g, _punctuation).getRegex();
-var blockSkip = /\[[^[\]]*?\]\([^\(\)]*?\)|`[^`]*?`|<[^<>]*?>/g;
+var blockSkip = /\[[^[\]]*?\]\((?:\\.|[^\\\(\)]|\((?:\\.|[^\\\(\)])*\))*\)|`[^`]*?`|<[^<>]*?>/g;
 var emStrongLDelim = edit(/^(?:\*+(?:((?!\*)[punct])|[^\s*]))|^_+(?:((?!_)[punct])|([^\s_]))/, "u").replace(/punct/g, _punctuation).getRegex();
-var emStrongRDelimAst = edit("^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)" + "|[^*]+(?=[^*])" + "|(?!\\*)[punct](\\*+)(?=[\\s]|$)" + "|[^punct\\s](\\*+)(?!\\*)(?=[punct\\s]|$)" + "|(?!\\*)[punct\\s](\\*+)(?=[^punct\\s])" + "|[\\s](\\*+)(?!\\*)(?=[punct])" + "|(?!\\*)[punct](\\*+)(?!\\*)(?=[punct])" + "|[^punct\\s](\\*+)(?=[^punct\\s])", "gu").replace(/punct/g, _punctuation).getRegex();
-var emStrongRDelimUnd = edit("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)" + "|[^_]+(?=[^_])" + "|(?!_)[punct](_+)(?=[\\s]|$)" + "|[^punct\\s](_+)(?!_)(?=[punct\\s]|$)" + "|(?!_)[punct\\s](_+)(?=[^punct\\s])" + "|[\\s](_+)(?!_)(?=[punct])" + "|(?!_)[punct](_+)(?!_)(?=[punct])", "gu").replace(/punct/g, _punctuation).getRegex();
+var emStrongRDelimAst = edit("^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)[punct](\\*+)(?=[\\s]|$)|[^punct\\s](\\*+)(?!\\*)(?=[punct\\s]|$)|(?!\\*)[punct\\s](\\*+)(?=[^punct\\s])|[\\s](\\*+)(?!\\*)(?=[punct])|(?!\\*)[punct](\\*+)(?!\\*)(?=[punct])|[^punct\\s](\\*+)(?=[^punct\\s])", "gu").replace(/punct/g, _punctuation).getRegex();
+var emStrongRDelimUnd = edit("^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)[punct](_+)(?=[\\s]|$)|[^punct\\s](_+)(?!_)(?=[punct\\s]|$)|(?!_)[punct\\s](_+)(?=[^punct\\s])|[\\s](_+)(?!_)(?=[punct])|(?!_)[punct](_+)(?!_)(?=[punct])", "gu").replace(/punct/g, _punctuation).getRegex();
 var anyPunctuation = edit(/\\([punct])/, "gu").replace(/punct/g, _punctuation).getRegex();
 var autolink = edit(/^<(scheme:[^\s\x00-\x1f<>]*|email)>/).replace("scheme", /[a-zA-Z][a-zA-Z0-9+.-]{1,31}/).replace("email", /[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_])/).getRegex();
 var _inlineComment = edit(_comment).replace("(?:-->|$)", "-->").getRegex();
-var tag = edit("^comment" + "|^</[a-zA-Z][\\w:-]*\\s*>" + "|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>" + "|^<\\?[\\s\\S]*?\\?>" + "|^<![a-zA-Z]+\\s[\\s\\S]*?>" + "|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment", _inlineComment).replace("attribute", /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex();
+var tag = edit("^comment|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:attribute)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>").replace("comment", _inlineComment).replace("attribute", /\s+[a-zA-Z:_][\w.:-]*(?:\s*=\s*"[^"]*"|\s*=\s*'[^']*'|\s*=\s*[^\s"'=<>`]+)?/).getRegex();
 var _inlineLabel = /(?:\[(?:\\.|[^\[\]\\])*\]|\\.|`[^`]*`|[^\[\]\\`])*?/;
 var link = edit(/^!?\[(label)\]\(\s*(href)(?:\s+(title))?\s*\)/).replace("label", _inlineLabel).replace("href", /<(?:\\.|[^\n<>\\])+>|[^\s\x00-\x1f]*/).replace("title", /"(?:\\"?|[^"\\])*"|'(?:\\'?|[^'\\])*'|\((?:\\\)?|[^)\\])*\)/).getRegex();
 var reflink = edit(/^!?\[(label)\]\[(ref)\]/).replace("label", _inlineLabel).replace("ref", _blockLabel).getRegex();
@@ -5188,7 +6257,7 @@ var inlineNormal = {
   emStrongLDelim,
   emStrongRDelimAst,
   emStrongRDelimUnd,
-  escape,
+  escape: escape2,
   link,
   nolink,
   punctuation,
@@ -5205,10 +6274,10 @@ var inlinePedantic = {
 };
 var inlineGfm = {
   ...inlineNormal,
-  escape: edit(escape).replace("])", "~|])").getRegex(),
+  escape: edit(escape2).replace("])", "~|])").getRegex(),
   url: edit(/^((?:ftp|https?):\/\/|www\.)(?:[a-zA-Z0-9\-]+\.?)+[^\s<]*|^email/, "i").replace("email", /[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])/).getRegex(),
   _backpedal: /(?:[^?!.,:;*_'"~()&]+|\([^)]*\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+/,
-  del: /^(~~?)(?=[^\s~])([\s\S]*?[^\s~])\1(?=[^~]|$)/,
+  del: /^(~~?)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/,
   text: /^([`~]+|[^`~])(?:(?= {2,}\n)|(?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)|[\s\S]*?(?:(?=[\\<!\[`*~_]|\b_|https?:\/\/|ftp:\/\/|www\.|$)|[^ ](?= {2,}\n)|[^a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-](?=[a-zA-Z0-9.!#$%&'*+\/=?_`{\|}~-]+@)))/
 };
 var inlineBreaks = {
@@ -5292,10 +6361,6 @@ class _Lexer {
   blockTokens(src, tokens = [], lastParagraphClipped = false) {
     if (this.options.pedantic) {
       src = src.replace(/\t/g, "    ").replace(/^ +$/gm, "");
-    } else {
-      src = src.replace(/^( *)(\t+)/gm, (_, leading, tabs) => {
-        return leading + "    ".repeat(tabs.length);
-      });
     }
     let token;
     let lastToken;
@@ -5678,7 +6743,7 @@ class _Renderer {
     }
     if (body)
       body = `<tbody>${body}</tbody>`;
-    return "<table>\n" + "<thead>\n" + header + "</thead>\n" + body + "</table>\n";
+    return "<table>\n<thead>\n" + header + "</thead>\n" + body + "</table>\n";
   }
   tablerow({ text }) {
     return `<tr>\n${text}</tr>\n`;
@@ -5779,12 +6844,12 @@ class _Parser {
     this.textRenderer = new _TextRenderer;
   }
   static parse(tokens, options) {
-    const parser5 = new _Parser(options);
-    return parser5.parse(tokens);
+    const parser6 = new _Parser(options);
+    return parser6.parse(tokens);
   }
   static parseInline(tokens, options) {
-    const parser5 = new _Parser(options);
-    return parser5.parseInline(tokens);
+    const parser6 = new _Parser(options);
+    return parser6.parseInline(tokens);
   }
   parse(tokens, top = true) {
     let out = "";
@@ -5939,6 +7004,7 @@ class _Parser {
 
 class _Hooks {
   options;
+  block;
   constructor(options) {
     this.options = options || _defaults;
   }
@@ -5956,13 +7022,19 @@ class _Hooks {
   processAllTokens(tokens) {
     return tokens;
   }
+  provideLexer() {
+    return this.block ? _Lexer.lex : _Lexer.lexInline;
+  }
+  provideParser() {
+    return this.block ? _Parser.parse : _Parser.parseInline;
+  }
 }
 
 class Marked {
   defaults = _getDefaults();
   options = this.setOptions;
-  parse = this.parseMarkdown(_Lexer.lex, _Parser.parse);
-  parseInline = this.parseMarkdown(_Lexer.lexInline, _Parser.parseInline);
+  parse = this.parseMarkdown(true);
+  parseInline = this.parseMarkdown(false);
   Parser = _Parser;
   Renderer = _Renderer;
   TextRenderer = _TextRenderer;
@@ -6115,7 +7187,7 @@ class Marked {
           if (!(prop in hooks)) {
             throw new Error(`hook '${prop}' does not exist`);
           }
-          if (prop === "options") {
+          if (["options", "block"].includes(prop)) {
             continue;
           }
           const hooksProp = prop;
@@ -6169,7 +7241,7 @@ class Marked {
   parser(tokens, options) {
     return _Parser.parse(tokens, options ?? this.defaults);
   }
-  parseMarkdown(lexer, parser5) {
+  parseMarkdown(blockType) {
     const parse = (src, options) => {
       const origOpt = { ...options };
       const opt = { ...this.defaults, ...origOpt };
@@ -6185,9 +7257,12 @@ class Marked {
       }
       if (opt.hooks) {
         opt.hooks.options = opt;
+        opt.hooks.block = blockType;
       }
+      const lexer = opt.hooks ? opt.hooks.provideLexer() : blockType ? _Lexer.lex : _Lexer.lexInline;
+      const parser6 = opt.hooks ? opt.hooks.provideParser() : blockType ? _Parser.parse : _Parser.parseInline;
       if (opt.async) {
-        return Promise.resolve(opt.hooks ? opt.hooks.preprocess(src) : src).then((src2) => lexer(src2, opt)).then((tokens) => opt.hooks ? opt.hooks.processAllTokens(tokens) : tokens).then((tokens) => opt.walkTokens ? Promise.all(this.walkTokens(tokens, opt.walkTokens)).then(() => tokens) : tokens).then((tokens) => parser5(tokens, opt)).then((html2) => opt.hooks ? opt.hooks.postprocess(html2) : html2).catch(throwError);
+        return Promise.resolve(opt.hooks ? opt.hooks.preprocess(src) : src).then((src2) => lexer(src2, opt)).then((tokens) => opt.hooks ? opt.hooks.processAllTokens(tokens) : tokens).then((tokens) => opt.walkTokens ? Promise.all(this.walkTokens(tokens, opt.walkTokens)).then(() => tokens) : tokens).then((tokens) => parser6(tokens, opt)).then((html2) => opt.hooks ? opt.hooks.postprocess(html2) : html2).catch(throwError);
       }
       try {
         if (opt.hooks) {
@@ -6200,7 +7275,7 @@ class Marked {
         if (opt.walkTokens) {
           this.walkTokens(tokens, opt.walkTokens);
         }
-        let html2 = parser5(tokens, opt);
+        let html2 = parser6(tokens, opt);
         if (opt.hooks) {
           html2 = opt.hooks.postprocess(html2);
         }
@@ -6261,13 +7336,13 @@ var setOptions = marked.setOptions;
 var use = marked.use;
 var walkTokens = marked.walkTokens;
 var parseInline = marked.parseInline;
-var parser5 = _Parser.parse;
+var parser6 = _Parser.parse;
 var lexer = _Lexer.lex;
 
 // main.ts
-function decidePosition(rcnt) {
+var decidePosition = function(rcnt) {
   if (rcnt.children.length === 1) {
-    return "just_results" /* just_results */;
+    return Position.just_results;
   } else if (rcnt.children.length >= 2) {
     let isOneOfTheChildATheSidecard = false;
     for (let child of rcnt.children) {
@@ -6277,24 +7352,24 @@ function decidePosition(rcnt) {
       }
     }
     if (isOneOfTheChildATheSidecard) {
-      return "with_sidecard" /* with_sidecard */;
+      return Position.with_sidecard;
     } else {
-      return "with_web_sources" /* with_web_sources */;
+      return Position.with_web_sources;
     }
   } else {
-    return "just_results" /* just_results */;
+    return Position.just_results;
   }
-}
-function placeDivInRcnt(rcnt, newDiv, position) {
+};
+var placeDivInRcnt = function(rcnt, newDiv, position) {
   switch (position) {
-    case "just_results" /* just_results */:
+    case Position.just_results:
       rcnt.appendChild(newDiv);
       break;
-    case "with_sidecard" /* with_sidecard */:
+    case Position.with_sidecard:
       const rhs = rcnt.querySelector("#rhs");
       rhs.insertBefore(newDiv, rhs.firstChild);
       break;
-    case "with_web_sources" /* with_web_sources */:
+    case Position.with_web_sources:
       const centerCol = rcnt.querySelector("#center_col");
       const wrapper = document.createElement("div");
       wrapper.className = "flex flex-row space-x-10";
@@ -6303,8 +7378,8 @@ function placeDivInRcnt(rcnt, newDiv, position) {
       rcnt.appendChild(wrapper);
       break;
   }
-}
-function getSearchQUery() {
+};
+var getSearchQUery = function() {
   let queryInput = document.querySelector("textarea[name='q']");
   if (queryInput) {
     return queryInput.value;
@@ -6312,7 +7387,7 @@ function getSearchQUery() {
     console.warn("Query input not found");
     return "";
   }
-}
+};
 async function makeAiRespond(msg, updateFunc) {
   if (isFirstMessage) {
     isFirstMessage = false;
@@ -6332,7 +7407,7 @@ async function makeAiRespond(msg, updateFunc) {
   }
   chatHistory.push({ role: "assistant", content: aiResponse });
 }
-function msgDiv(role) {
+var msgDiv = function(role) {
   const div = document.createElement("div");
   const id = `ai-msg-${Math.random().toString(36).substring(7)}`;
   div.id = id;
@@ -6349,16 +7424,16 @@ function msgDiv(role) {
     content.innerHTML = await marked(raw);
   };
   return [div, id, updateFunc];
-}
-function createDiv() {
+};
+var createDiv = function() {
   const div = document.createElement("div");
   div.id = DIV;
   let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"];
-  if (position === "with_sidecard" /* with_sidecard */) {
+  if (position === Position.with_sidecard) {
     classes = classes.concat(["w-full", "my-4"]);
-  } else if (position === "just_results" /* just_results */) {
+  } else if (position === Position.just_results) {
     classes = classes.concat(["max-w-[33%]", "h-min", "ml-[var(--rhs-margin)]"]);
-  } else if (position === "with_web_sources" /* with_web_sources */) {
+  } else if (position === Position.with_web_sources) {
   }
   div.className = classes.join(" ");
   const msgsDiv = document.createElement("div");
@@ -6387,63 +7462,55 @@ function createDiv() {
   div.appendChild(msgsDiv);
   div.appendChild(inputDiv);
   return div;
-}
-function addMessageToDiv(div) {
+};
+var addMessageToDiv = function(div) {
   document.querySelector(`#${DIV} div`)?.appendChild(div);
-}
-function DisplayError(msg) {
-  const error10 = document.createElement("div");
-  error10.className = "border border-red-500 bg-red-200 p-4 rounded-xl text-red-900";
-  error10.innerText = `Error: ${msg}!`;
+};
+var DisplayError = function(msg) {
+  const error12 = document.createElement("div");
+  error12.className = "border border-red-500 bg-red-200 p-4 rounded-xl text-red-900";
+  error12.innerText = `Error: ${msg}!`;
   const container = document.getElementById(DIV);
   if (container) {
     container.innerHTML = "";
-    container.appendChild(error10);
+    container.appendChild(error12);
   } else {
     console.error("Container not found");
   }
   console.error(msg);
-}
+};
 var DIV = "ai-main-container";
 var key = "";
-var triedGettingKey = false;
-var storageKey = "L2VnTsJG7BYcMOy&oj";
+var apiKeyStorageKey = "L2VnTsJG7BYcMOy&oj";
 var ai;
 var SYSTEM_MSG;
 var SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`;
 var MODEL = "o4-mini";
-chrome.storage.sync.get("model", (data) => {
-  const m = data["model"];
-  if (m) {
-    MODEL = m;
-  }
-});
-chrome.storage.sync.get(storageKey, (data) => {
-  const apiKey = data[storageKey];
-  if (apiKey) {
-    key = apiKey;
-  } else {
+var settingsLoaded = false;
+chrome.storage.sync.get([apiKeyStorageKey, "model", "systemPrompt"], (data) => {
+  key = data[apiKeyStorageKey] || "";
+  MODEL = data["model"] || "o4-mini";
+  SYSTEM_MSG = data["systemPrompt"] || SYSTEM_MSG_FALLBACK;
+  if (!key) {
     console.error("No API Key found");
   }
-  triedGettingKey = true;
-});
-chrome.storage.sync.get("systemPrompt", function(data) {
-  SYSTEM_MSG = data["systemPrompt"] || SYSTEM_MSG_FALLBACK;
+  settingsLoaded = true;
+  console.debug(`Loaded settings: Key found? ${!!key}, Model: ${MODEL}, System Prompt: ${SYSTEM_MSG}`);
 });
 var Position;
-((Position2) => {
+(function(Position2) {
   Position2["just_results"] = "just_results";
   Position2["with_sidecard"] = "with_sidecard";
   Position2["with_web_sources"] = "with_web_sources";
-})(Position ||= {});
+})(Position || (Position = {}));
 Object.defineProperty(Position, "ToString", {
   value: function(position) {
     switch (position) {
-      case "just_results" /* just_results */:
+      case Position.just_results:
         return "Just Results";
-      case "with_sidecard" /* with_sidecard */:
+      case Position.with_sidecard:
         return "With Sidecard";
-      case "with_web_sources" /* with_web_sources */:
+      case Position.with_web_sources:
         return "With Web Sources";
     }
   },
@@ -6465,16 +7532,23 @@ window.onload = async function() {
   if (rcnt) {
     position = decidePosition(rcnt);
     console.debug(`position: ${position}`);
-    if (position === "just_results" /* just_results */) {
+    if (position === Position.just_results) {
       rcnt.className += " !max-w-full";
     }
     const newDiv = createDiv();
     placeDivInRcnt(rcnt, newDiv, position);
-    while (!triedGettingKey) {
+    while (!settingsLoaded) {
       await new Promise((r) => setTimeout(r, 500));
+      console.debug("Waiting for settings...");
     }
     if (!key) {
-      DisplayError("API Key not found");
+      chrome.storage.sync.get(apiKeyStorageKey, (data) => {
+        if (apiKeyStorageKey in data) {
+          DisplayError("API Key is set but empty. Please provide a valid key in the extension options.");
+        } else {
+          DisplayError("API Key not found. Please set it in the extension options.");
+        }
+      });
       return;
     }
     const query = getSearchQUery();
@@ -6482,11 +7556,18 @@ window.onload = async function() {
       apiKey: key,
       dangerouslyAllowBrowser: true
     });
-    ai.chat.completions.create({
-      model: MODEL,
-      messages: [{ role: "system", content: SYSTEM_MSG }],
-      stream: false
-    });
+    try {
+      await ai.chat.completions.create({
+        model: MODEL,
+        messages: [{ role: "system", content: SYSTEM_MSG }],
+        stream: false
+      });
+      console.debug("Initial API connection successful.");
+    } catch (error12) {
+      console.error("Error during initial API connection test:", error12);
+      DisplayError(`Failed to connect to the API. Please check your API key and network connection. Error: ${error12.message}`);
+      return;
+    }
     const [quebbinDiv, , quebbinUpdate] = msgDiv("user");
     addMessageToDiv(quebbinDiv);
     for (let word of query.split(" ")) {

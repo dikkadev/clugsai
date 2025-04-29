@@ -14,7 +14,10 @@ document.addEventListener('DOMContentLoaded', function() {
         systemPromptTextarea.value = data['systemPrompt'] || SYSTEM_MSG;
         var savedModel = data['model'];
         // Fallback to default if no model saved or an invalid legacy key
-        if !savedModel {
+        //if !savedModel { //unexpected token '!' error
+        //    savedModel = 'o4-mini';
+        //}
+        if (!savedModel) {
             savedModel = 'o4-mini';
         }
         modelSelect.value = savedModel;
@@ -33,6 +36,10 @@ document.addEventListener('DOMContentLoaded', function() {
             'model': model
         }, function() {
             window.alert('Settings saved successfully!');
+            //print all of local storage just to check
+            for (var key in localStorage) {
+                console.log(key + " => " + localStorage[key]);
+            }
         });
     });
 

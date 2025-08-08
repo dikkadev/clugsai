@@ -1,10 +1,12 @@
 {
 	"dependencies": {
 		"@types/marked": "^6.0.0",
-		"marked": "^14.0.0",
-		"openai": "^4.55.4"
+		"marked": "^16.1.2",
+		"openai": "^5.12.1"
 	},
 	"devDependencies": {
-		"@types/chrome": "^0.0.317"
+		"@tailwindcss/typography": "^0.5.16",
+		"@types/chrome": "^0.0.317",
+		"tailwindcss": "^4.1.11"
 	}
 }

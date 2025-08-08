@@ -13,12 +13,8 @@ document.addEventListener('DOMContentLoaded', function() {
         apiKeyInput.value = data[storageKey] || '';
         systemPromptTextarea.value = data['systemPrompt'] || SYSTEM_MSG;
         var savedModel = data['model'];
-        // Fallback to default if no model saved or an invalid legacy key
-        //if !savedModel { //unexpected token '!' error
-        //    savedModel = 'o4-mini';
-        //}
         if (!savedModel) {
-            savedModel = 'o4-mini';
+            savedModel = 'gpt-5-nano';
         }
         modelSelect.value = savedModel;
     });

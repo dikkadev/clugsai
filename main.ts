@@ -1,4 +1,3 @@
-import 'openai/shims/web'
 import OpenAI from 'openai'
 import { marked } from 'marked';
 
@@ -9,14 +8,22 @@ const apiKeyStorageKey = 'L2VnTsJG7BYcMOy&oj'
 let ai: OpenAI
 
 let SYSTEM_MSG: string
-const SYSTEM_MSG_FALLBACK = `You are to act as a Search Engine AI. Answer like one. Always answer! Keep answers brief and pragmatic.`
+const SYSTEM_MSG_FALLBACK = `You are a concise search companion for Google queries.
+Behavior:
+- Answer directly first; then give 3–6 tight bullet points with key facts, tradeoffs, and next steps.
+- Keep it brief and pragmatic. Avoid filler, hedging, and disclaimers unless safety-critical.
+- If the query is ambiguous, state the top interpretation you’re using and continue.
+- Prefer recent, broadly accepted knowledge; note if uncertainty is material.
+- Format for fast scanning: short sentences, bold keywords, links only when essential.
+- No roleplay, no theatrics. Output should fit well in a compact sidebar.
+`
 // Model selection with fallback from storage
-let MODEL = 'o4-mini'
+let MODEL = 'gpt-5-nano'
 
 let settingsLoaded = false;
 chrome.storage.sync.get([apiKeyStorageKey, 'model', 'systemPrompt'], (data) => {
     key = data[apiKeyStorageKey] || '';
-    MODEL = data['model'] || 'o4-mini';
+    MODEL = data['model'] || 'gpt-5-nano';
     SYSTEM_MSG = data['systemPrompt'] || SYSTEM_MSG_FALLBACK;
 
     if (!key) {
@@ -137,19 +144,37 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
     const div = document.createElement("div")
     const id = `ai-msg-${Math.random().toString(36).substring(7)}`
     div.id = id
-    div.className = "border border-emerald-500 bg-emerald-950 px-4 min-h-[2ch] rounded-xl text-emerald-100 w-4/5 mb-4"
+    div.className = "px-4 py-3 min-h-[2ch] rounded-xl mb-4 border text-gray-100"
     if (role === "user") {
-        div.className += " self-end"
+        div.className += " self-end bg-gray-800 border-gray-700 w-4/5"
+    } else {
+        div.className += " bg-gray-900 border-gray-700 ai-msg"
+    }
+
+    const loader = document.createElement("div")
+    if (role !== "user") {
+        loader.className = "ai-typing"
+        loader.innerHTML = '<span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span>'
     }
 
     const content = document.createElement("div")
+    content.className = "prose-sm"
 
+    if (role !== "user") {
+        div.appendChild(loader)
+    }
     div.appendChild(content)
 
     const updateFunc = async (msg: string) => {
         let old = content.getAttribute('raw') || ''
         let raw = old + msg
         content.setAttribute('raw', raw)
+
+        if (role !== "user") {
+            if (raw.length > 0) {
+                loader.style.display = 'none'
+            }
+        }
 
         content.innerHTML = await marked(raw)
     }
@@ -160,7 +185,18 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
 function createDiv(): HTMLDivElement {
     const div = document.createElement("div")
     div.id = DIV
-    let classes = ["flex", "flex-col", "rounded-xl", "p-2", "min-w-[30rem]", "border", "border-emerald-800", "prose-sm"]
+    let classes = [
+        "flex",
+        "flex-col",
+        "rounded-2xl",
+        "p-3",
+        "min-w-[28rem]",
+        "border",
+        "border-gray-700",
+        "bg-gray-900",
+        "text-gray-100",
+        "shadow-lg"
+    ]
 
     if (position === Position.with_sidecard) {
         classes = classes.concat([ "w-full", "my-4"])
@@ -171,32 +207,73 @@ function createDiv(): HTMLDivElement {
     }
     div.className = classes.join(" ")
 
+    // Header
+    const header = document.createElement("div")
+    header.className = "flex items-center justify-between mb-2"
+    const left = document.createElement("div")
+    left.className = "flex items-center gap-2"
+    const title = document.createElement("span")
+    title.textContent = "AI Assistant"
+    title.className = "text-sm font-medium text-gray-200"
+    const modelPill = document.createElement("span")
+    modelPill.className = "text-xs px-2 py-0.5 rounded-full bg-gray-800 border border-gray-700 text-gray-200"
+    modelPill.textContent = MODEL
+    left.appendChild(title)
+    left.appendChild(modelPill)
+
+    const right = document.createElement("div")
+    right.className = "flex items-center gap-2"
+    const regenBtn = document.createElement("button")
+    regenBtn.textContent = "Regenerate"
+    regenBtn.className = "text-xs px-2 py-1 rounded-md border border-gray-700 text-gray-200 hover:bg-gray-800"
+    right.appendChild(regenBtn)
+    header.appendChild(left)
+    header.appendChild(right)
+
     const msgsDiv = document.createElement("div")
-    msgsDiv.className = "flex flex-col"
+    msgsDiv.id = "ai-msgs"
+    msgsDiv.className = "flex flex-col px-2"
 
     const inputDiv = document.createElement("div")
-    inputDiv.className = "flex flex-row"
+    inputDiv.className = "flex flex-row mt-2"
     const input = document.createElement("textarea")
-    input.className = "border border-emerald-800 bg-emerald-950 text-emerald-100 rounded-xl p-2 w-full h-20"
-    input.placeholder = "Ask a follow-up question..."
+    input.className = "border border-gray-700 bg-gray-900 text-gray-100 rounded-xl p-2 w-full h-20"
+    input.placeholder = "Ask a follow-up question… (Shift+Enter for newline)"
     inputDiv.appendChild(input)
     const sendButton = document.createElement("button")
     sendButton.innerText = "Send"
-    sendButton.className = "bg-emerald-800 text-emerald-100 rounded-xl p-2 ml-2"
+    sendButton.className = "bg-gray-700 hover:bg-gray-600 text-white rounded-xl px-3 py-2 ml-2"
+    let lastUserPrompt = ""
     sendButton.onclick = async () => {
         const [userDiv, , userUpdate] = msgDiv('user')
         addMessageToDiv(userDiv)
         let msg = input.value
         userUpdate(msg)
         input.value = ""
+        lastUserPrompt = msg
 
         const [aiDiv, , aiUpdate] = msgDiv('ai')
         addMessageToDiv(aiDiv)
         makeAiRespond(msg, aiUpdate)
         input.focus()
     }
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            sendButton.click()
+        }
+    })
     inputDiv.appendChild(sendButton)
 
+    regenBtn.onclick = () => {
+        if (!lastUserPrompt) return
+        const [aiDiv, , aiUpdate] = msgDiv('ai')
+        addMessageToDiv(aiDiv)
+        makeAiRespond(lastUserPrompt, aiUpdate)
+        input.focus()
+    }
+
+    div.appendChild(header)
     div.appendChild(msgsDiv)
     div.appendChild(inputDiv)
 
@@ -204,7 +281,7 @@ function createDiv(): HTMLDivElement {
 }
 
 function addMessageToDiv(div: HTMLDivElement) {
-    document.querySelector(`#${DIV} div`)?.appendChild(div)
+    document.querySelector(`#ai-msgs`)?.appendChild(div)
 }
 
 function DisplayError(msg: string) {
@@ -234,17 +311,16 @@ window.onload = async function() {
     console.debug(`query: ${getSearchQUery()}`)
     console.debug(`using system msg: ${SYSTEM_MSG}`)
 
-    if (rcnt) 
+    if (rcnt) {
         position = decidePosition(rcnt)
         console.debug(`position: ${position}`)
         if (position === Position.just_results) {
             rcnt.className += ' !max-w-full'
         }
 
-
         const newDiv = createDiv()
-
         placeDivInRcnt(rcnt, newDiv, position)
+
         while (!settingsLoaded) {
             await new Promise(r => setTimeout(r, 500))
             console.debug('Waiting for settings...');
@@ -277,11 +353,12 @@ window.onload = async function() {
                 messages: [{ role: 'system', content: SYSTEM_MSG }],
                 stream: false, // Keep false for a simple check
             });
-            console.debug("Initial API connection successful.");
+            console.debug("Initial API connection successful.")
         } catch (error) {
-            console.error("Error during initial API connection test:", error);
-            DisplayError(`Failed to connect to the API. Please check your API key and network connection. Error: ${error.message}`);
-            return; // Stop execution if the initial check fails
+            console.error("Error during initial API connection test:", error)
+            // @ts-ignore
+            DisplayError(`Failed to connect to the API. Please check your API key and network connection. Error: ${error.message}`)
+            return
         }
 
         const [quebbinDiv, , quebbinUpdate] = msgDiv('user')
@@ -295,6 +372,5 @@ window.onload = async function() {
         const [aiDiv, , aiUpdate] = msgDiv('assistant')
         addMessageToDiv(aiDiv)
         makeAiRespond(query, aiUpdate)
-
     }
 }

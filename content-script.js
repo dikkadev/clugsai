@@ -6698,11 +6698,11 @@ function msgDiv(role) {
   const div = document.createElement("div");
   const id = `ai-msg-${Math.random().toString(36).substring(7)}`;
   div.id = id;
-  div.className = "px-4 py-3 min-h-[2ch] rounded-xl mb-4 border text-gray-100";
+  div.className = "py-3 min-h-[2ch] rounded-xl mb-4 border text-gray-100";
   if (role === "user") {
-    div.className += " self-end bg-gray-800 border-gray-700 w-4/5";
+    div.className += " self-end w-4/5 px-4 ai-msg-user";
   } else {
-    div.className += " bg-gray-900 border-gray-700 ai-msg";
+    div.className += " ai-msg ai-msg-assistant pl-3 pr-4";
   }
   const loader = document.createElement("div");
   if (role !== "user") {
@@ -6735,13 +6735,11 @@ function createDiv() {
     "flex",
     "flex-col",
     "rounded-2xl",
-    "p-3",
-    "min-w-[28rem]",
+    "min-w-[30rem]",
     "border",
-    "border-gray-700",
-    "bg-gray-900",
     "text-gray-100",
-    "shadow-lg"
+    "shadow-lg",
+    "ai-panel"
   ];
   if (position === "with_sidecard" /* with_sidecard */) {
     classes = classes.concat(["w-full", "my-4"]);
@@ -6749,6 +6747,29 @@ function createDiv() {
     classes = classes.concat(["max-w-[33%]", "h-min", "ml-[var(--rhs-margin)]"]);
   } else if (position === "with_web_sources" /* with_web_sources */) {}
   div.className = classes.join(" ");
+  div.style.minWidth = "32rem";
+  const dragBar = document.createElement("div");
+  dragBar.className = "ai-drag-handle";
+  const dragIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  dragIcon.setAttribute("viewBox", "0 0 24 14");
+  dragIcon.setAttribute("aria-hidden", "true");
+  dragIcon.classList.add("ai-drag-icon");
+  const circlePositions = [
+    [4, 5],
+    [12, 5],
+    [20, 5],
+    [4, 11],
+    [12, 11],
+    [20, 11]
+  ];
+  for (const [cx, cy] of circlePositions) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", String(cx));
+    c.setAttribute("cy", String(cy));
+    c.setAttribute("r", "1.4");
+    dragIcon.appendChild(c);
+  }
+  dragBar.appendChild(dragIcon);
   const header = document.createElement("div");
   header.className = "flex items-center justify-between mb-2";
   const left = document.createElement("div");
@@ -6809,9 +6830,14 @@ function createDiv() {
     makeAiRespond(lastUserPrompt, aiUpdate);
     input.focus();
   };
-  div.appendChild(header);
-  div.appendChild(msgsDiv);
-  div.appendChild(inputDiv);
+  div.appendChild(dragBar);
+  const bodyDiv = document.createElement("div");
+  bodyDiv.className = "ai-panel-body";
+  bodyDiv.appendChild(header);
+  bodyDiv.appendChild(msgsDiv);
+  bodyDiv.appendChild(inputDiv);
+  div.appendChild(bodyDiv);
+  queueMicrotask(() => initDraggable(div, dragBar));
   return div;
 }
 function addMessageToDiv(div) {
@@ -6884,7 +6910,84 @@ window.onload = async function() {
       await new Promise((r) => setTimeout(r, 75));
     }
     const [aiDiv, , aiUpdate] = msgDiv("assistant");
+    aiDiv.classList.add("ai-msg-assistant");
     addMessageToDiv(aiDiv);
     makeAiRespond(query, aiUpdate);
   }
 };
+function initDraggable(panel, handle) {
+  let isFixed = false;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let placeholder = null;
+  const onPointerDown = (ev) => {
+    const target = ev.target;
+    if (target.closest("button, a, input, textarea, select"))
+      return;
+    const rect = panel.getBoundingClientRect();
+    if (!isFixed) {
+      placeholder = document.createElement("div");
+      placeholder.style.width = rect.width + "px";
+      placeholder.style.height = rect.height + "px";
+      placeholder.style.visibility = "hidden";
+      const parent = panel.parentElement;
+      if (parent) {
+        parent.insertBefore(placeholder, panel);
+      }
+      panel.style.position = "fixed";
+      panel.style.left = rect.left + "px";
+      panel.style.top = rect.top + "px";
+      panel.style.width = rect.width + "px";
+      panel.style.zIndex = "2147483647";
+      isFixed = true;
+      panel.classList.add("ai-panel--floating");
+    }
+    isDragging = true;
+    startX = ev.clientX;
+    startY = ev.clientY;
+    startLeft = parseFloat(panel.style.left || "0");
+    startTop = parseFloat(panel.style.top || "0");
+    document.body.style.userSelect = "none";
+    handle.classList.add("dragging");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+  };
+  const onPointerMove = (ev) => {
+    if (!isDragging)
+      return;
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+    const rect = panel.getBoundingClientRect();
+    let nextLeft = startLeft + dx;
+    let nextTop = startTop + dy;
+    const gutter = 8;
+    const minLeft = -Math.max(0, rect.width - 48);
+    nextLeft = Math.max(minLeft, Math.min(viewW - gutter, nextLeft));
+    nextTop = Math.max(gutter, Math.min(viewH - gutter, nextTop));
+    panel.style.left = nextLeft + "px";
+    panel.style.top = nextTop + "px";
+  };
+  const onPointerUp = () => {
+    isDragging = false;
+    document.body.style.userSelect = "";
+    handle.classList.remove("dragging");
+    window.removeEventListener("pointermove", onPointerMove);
+  };
+  handle.addEventListener("pointerdown", onPointerDown);
+  window.addEventListener("resize", () => {
+    if (!isFixed)
+      return;
+    const rect = panel.getBoundingClientRect();
+    const gutter = 8;
+    const minLeft = -Math.max(0, rect.width - 48);
+    const left = Math.min(Math.max(minLeft, rect.left), window.innerWidth - gutter);
+    const top = Math.min(Math.max(gutter, rect.top), window.innerHeight - gutter);
+    panel.style.left = left + "px";
+    panel.style.top = top + "px";
+  });
+}

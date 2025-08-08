@@ -144,11 +144,12 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
     const div = document.createElement("div")
     const id = `ai-msg-${Math.random().toString(36).substring(7)}`
     div.id = id
-    div.className = "px-4 py-3 min-h-[2ch] rounded-xl mb-4 border text-gray-100"
+    div.className = "py-3 min-h-[2ch] rounded-xl mb-4 border text-gray-100"
     if (role === "user") {
-        div.className += " self-end bg-gray-800 border-gray-700 w-4/5"
+        div.className += " self-end w-4/5 px-4 ai-msg-user"
     } else {
-        div.className += " bg-gray-900 border-gray-700 ai-msg"
+        // slightly smaller left padding to reduce perceived indent
+        div.className += " ai-msg ai-msg-assistant pl-3 pr-4"
     }
 
     const loader = document.createElement("div")
@@ -189,13 +190,11 @@ function createDiv(): HTMLDivElement {
         "flex",
         "flex-col",
         "rounded-2xl",
-        "p-3",
-        "min-w-[28rem]",
+        "min-w-[30rem]",
         "border",
-        "border-gray-700",
-        "bg-gray-900",
         "text-gray-100",
-        "shadow-lg"
+        "shadow-lg",
+        "ai-panel"
     ]
 
     if (position === Position.with_sidecard) {
@@ -206,8 +205,29 @@ function createDiv(): HTMLDivElement {
 
     }
     div.className = classes.join(" ")
+    ;(div.style as any).minWidth = '32rem'
 
-    // Header
+    // Drag handle bar (top)
+    const dragBar = document.createElement("div")
+    dragBar.className = "ai-drag-handle"
+    const dragIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg")
+    dragIcon.setAttribute("viewBox", "0 0 24 14")
+    dragIcon.setAttribute("aria-hidden", "true")
+    dragIcon.classList.add("ai-drag-icon")
+    const circlePositions = [
+        [4,5],[12,5],[20,5],
+        [4,11],[12,11],[20,11]
+    ]
+    for (const [cx, cy] of circlePositions) {
+        const c = document.createElementNS("http://www.w3.org/2000/svg", "circle")
+        c.setAttribute("cx", String(cx))
+        c.setAttribute("cy", String(cy))
+        c.setAttribute("r", "1.4")
+        dragIcon.appendChild(c)
+    }
+    dragBar.appendChild(dragIcon)
+
+    // Header (content)
     const header = document.createElement("div")
     header.className = "flex items-center justify-between mb-2"
     const left = document.createElement("div")
@@ -273,9 +293,16 @@ function createDiv(): HTMLDivElement {
         input.focus()
     }
 
-    div.appendChild(header)
-    div.appendChild(msgsDiv)
-    div.appendChild(inputDiv)
+    div.appendChild(dragBar)
+    const bodyDiv = document.createElement("div")
+    bodyDiv.className = "ai-panel-body"
+    bodyDiv.appendChild(header)
+    bodyDiv.appendChild(msgsDiv)
+    bodyDiv.appendChild(inputDiv)
+    div.appendChild(bodyDiv)
+
+    // Initialize draggable behavior after element is attached
+    queueMicrotask(() => initDraggable(div, dragBar))
 
     return div
 }
@@ -370,7 +397,95 @@ window.onload = async function() {
         }
 
         const [aiDiv, , aiUpdate] = msgDiv('assistant')
+        aiDiv.classList.add('ai-msg-assistant')
         addMessageToDiv(aiDiv)
         makeAiRespond(query, aiUpdate)
     }
+}
+
+// Draggable overlay implementation
+function initDraggable(panel: HTMLDivElement, handle: HTMLElement) {
+    let isFixed = false
+    let isDragging = false
+    let startX = 0
+    let startY = 0
+    let startLeft = 0
+    let startTop = 0
+    let placeholder: HTMLDivElement | null = null
+
+    const onPointerDown = (ev: PointerEvent) => {
+        // Don’t start drag from interactive elements inside the handle
+        const target = ev.target as HTMLElement
+        if (target.closest('button, a, input, textarea, select')) return
+
+        const rect = panel.getBoundingClientRect()
+        if (!isFixed) {
+            // Insert placeholder to keep layout
+            placeholder = document.createElement('div')
+            placeholder.style.width = rect.width + 'px'
+            placeholder.style.height = rect.height + 'px'
+            placeholder.style.visibility = 'hidden'
+            const parent = panel.parentElement
+            if (parent) {
+                parent.insertBefore(placeholder, panel)
+            }
+            panel.style.position = 'fixed'
+            panel.style.left = rect.left + 'px'
+            panel.style.top = rect.top + 'px'
+            panel.style.width = rect.width + 'px'
+            panel.style.zIndex = '2147483647'
+            isFixed = true
+            panel.classList.add('ai-panel--floating')
+        }
+
+        isDragging = true
+        startX = ev.clientX
+        startY = ev.clientY
+        startLeft = parseFloat(panel.style.left || '0')
+        startTop = parseFloat(panel.style.top || '0')
+        document.body.style.userSelect = 'none'
+        handle.classList.add('dragging')
+        window.addEventListener('pointermove', onPointerMove)
+        window.addEventListener('pointerup', onPointerUp, { once: true })
+    }
+
+    const onPointerMove = (ev: PointerEvent) => {
+        if (!isDragging) return
+        const dx = ev.clientX - startX
+        const dy = ev.clientY - startY
+        const viewW = window.innerWidth
+        const viewH = window.innerHeight
+        const rect = panel.getBoundingClientRect()
+        let nextLeft = startLeft + dx
+        let nextTop = startTop + dy
+        // clamp inside viewport with small gutter
+        const gutter = 8
+        // allow panel to slide partially off-left without causing page horizontal scroll
+        const minLeft = -Math.max(0, rect.width - 48) // keep at least 48px visible
+        nextLeft = Math.max(minLeft, Math.min(viewW - gutter, nextLeft))
+        nextTop = Math.max(gutter, Math.min(viewH - gutter, nextTop))
+        panel.style.left = nextLeft + 'px'
+        panel.style.top = nextTop + 'px'
+    }
+
+    const onPointerUp = () => {
+        isDragging = false
+        document.body.style.userSelect = ''
+        handle.classList.remove('dragging')
+        window.removeEventListener('pointermove', onPointerMove)
+    }
+
+    handle.addEventListener('pointerdown', onPointerDown)
+
+    // Re-clamp on resize
+    window.addEventListener('resize', () => {
+        if (!isFixed) return
+        const rect = panel.getBoundingClientRect()
+        const gutter = 8
+        const minLeft = -Math.max(0, rect.width - 48)
+        const left = Math.min(Math.max(minLeft, rect.left), window.innerWidth - gutter)
+        const top = Math.min(Math.max(gutter, rect.top), window.innerHeight - gutter)
+        panel.style.left = left + 'px'
+        panel.style.top = top + 'px'
+    })
 }

@@ -6702,7 +6702,7 @@ function msgDiv(role) {
   if (role === "user") {
     div.className += " self-end w-4/5 px-4 ai-msg-user";
   } else {
-    div.className += " ai-msg ai-msg-assistant pl-3 pr-4";
+    div.className += " ai-msg ai-msg-assistant px-4";
   }
   const loader = document.createElement("div");
   if (role !== "user") {
@@ -6792,7 +6792,7 @@ function createDiv() {
   header.appendChild(right);
   const msgsDiv = document.createElement("div");
   msgsDiv.id = "ai-msgs";
-  msgsDiv.className = "flex flex-col px-2";
+  msgsDiv.className = "flex flex-col px-2 ai-msgs";
   const inputDiv = document.createElement("div");
   inputDiv.className = "flex flex-row mt-2";
   const input = document.createElement("textarea");

@@ -148,8 +148,8 @@ function msgDiv(role: string): [HTMLDivElement, string, (string) => void] {
     if (role === "user") {
         div.className += " self-end w-4/5 px-4 ai-msg-user"
     } else {
-        // slightly smaller left padding to reduce perceived indent
-        div.className += " ai-msg ai-msg-assistant pl-3 pr-4"
+        // restore comfortable internal padding; list indents handled via CSS overrides
+        div.className += " ai-msg ai-msg-assistant px-4"
     }
 
     const loader = document.createElement("div")
@@ -252,7 +252,7 @@ function createDiv(): HTMLDivElement {
 
     const msgsDiv = document.createElement("div")
     msgsDiv.id = "ai-msgs"
-    msgsDiv.className = "flex flex-col px-2"
+    msgsDiv.className = "flex flex-col px-2 ai-msgs"
 
     const inputDiv = document.createElement("div")
     inputDiv.className = "flex flex-row mt-2"

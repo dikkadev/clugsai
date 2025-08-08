@@ -91,7 +91,9 @@
   .ai-msgs {
     max-height: min(60vh, 640px);
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
+  .ai-msgs > * { flex: 0 0 auto; }
 }
 
 @keyframes ai-dot-pulse {
